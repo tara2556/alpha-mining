@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Market data and generated research outputs are local artifacts.
+data/raw/
+data/processed/
+reports/
+notebooks/.ipynb_checkpoints/
+
