@@ -148,7 +148,7 @@ function renderSummary(report, series) {
     const nameCell = el("td");
     if (series[i]) {
       const chip = el("span", { class: "chip" });
-      chip.style.background = series[i].color;
+      chip.style.background = "var(--benchmark)";
       nameCell.append(chip);
     }
     nameCell.append(document.createTextNode(seriesName(ledger.label)));
@@ -206,7 +206,7 @@ function renderCharts(report, series) {
       tick: tickPct, fmt: (v) => pct(v), title: "回撤",
     }),
     lineChart($("#chart-exposure"), {
-      dates, series: pick("gross_exposure"), baseline: 0, include: [0, 1],
+      dates, series: pick("gross_exposure"), baseline: 0, include: [0, 1], lanes: true,
       tick: tickPct, fmt: (v) => pct(v, 1), title: "曝險",
     }),
   ];
@@ -369,8 +369,8 @@ function lineChart(container, opt) {
     const W = container.clientWidth;
     const H = container.clientHeight;
     if (!W || !H) return;
-    const directLabels = W >= 480;
-    const m = { l: 56, r: directLabels ? 92 : 12, t: 10, b: 24 };
+    const directLabels = !opt.lanes && W >= 480;
+    const m = opt.lanes ? { l: 104, r: 12, t: 6, b: 24 } : { l: 56, r: directLabels ? 100 : 12, t: 10, b: 24 };
     const n = opt.dates.length;
     const all = opt.series.flatMap((s) => s.values).concat(opt.include || [], [opt.baseline]);
     let lo = Math.min(...all), hi = Math.max(...all);
@@ -383,13 +383,15 @@ function lineChart(container, opt) {
     const pw = W - m.l - m.r, ph = H - m.t - m.b;
     const x = (i) => m.l + (n === 1 ? pw / 2 : (i / (n - 1)) * pw);
     const y = (v) => m.t + (1 - (v - lo) / (hi - lo)) * ph;
-    geom = { x, y, m, pw, ph, n };
+    const laneH = ph / opt.series.length;
+    const ys = opt.lanes ? (j, v) => m.t + j * laneH + 3 + (1 - Math.max(0, Math.min(1, v))) * (laneH - 8) : null;
+    geom = { x, y, ys, m, pw, ph, n };
 
     root.replaceChildren();
     root.setAttribute("viewBox", `0 0 ${W} ${H}`);
     const grid = svg("g", { class: "grid" });
     const axis = svg("g", { class: "axis" });
-    for (const t of ticks) {
+    for (const t of opt.lanes ? [] : ticks) {
       grid.append(svg("line", { x1: m.l, x2: m.l + pw, y1: y(t), y2: y(t) }));
       const label = svg("text", { x: m.l - 8, y: y(t) + 4, "text-anchor": "end" });
       label.textContent = opt.tick(t);
@@ -406,15 +408,27 @@ function lineChart(container, opt) {
       axis.append(label);
     }
     root.append(grid, axis);
-    root.append(svg("line", { class: "baseline", x1: m.l, x2: m.l + pw, y1: y(opt.baseline), y2: y(opt.baseline) }));
-
-    // Thin dashed benchmark goes last so a strategy that tracks it can't hide it.
-    const order = [...opt.series].sort((a, b) => (a.dashed ? 1 : 0) - (b.dashed ? 1 : 0));
-    for (const s of order) {
-      const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
-      root.append(svg("path", {
-        class: "series", d, stroke: s.color, ...(s.dashed ? { "stroke-dasharray": "5 4", "stroke-width": 1.5 } : {}),
-      }));
+    if (opt.lanes) {
+      opt.series.forEach((s, j) => {
+        const base = ys(j, 0);
+        root.append(svg("line", { class: "baseline", x1: m.l, x2: m.l + pw, y1: base, y2: base }));
+        const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${ys(j, v).toFixed(1)}`).join("");
+        root.append(svg("path", { class: "area", d: `M${x(0)},${base}L${d.slice(1)}L${x(n - 1)},${base}Z`, fill: s.color, "fill-opacity": .18, stroke: "none" }));
+        root.append(svg("path", { class: "series", d, stroke: s.color, "stroke-width": 1.25, style: "stroke-width: 1.25" }));
+        const label = svg("text", { class: "lane-label", x: m.l - 8, y: m.t + j * laneH + laneH / 2 + 4, "text-anchor": "end" });
+        label.textContent = s.name;
+        root.append(label);
+      });
+    } else {
+      root.append(svg("line", { class: "baseline", x1: m.l, x2: m.l + pw, y1: y(opt.baseline), y2: y(opt.baseline) }));
+      // Thin dashed benchmark goes last so a strategy that tracks it can't hide it.
+      const order = [...opt.series].sort((a, b) => (a.dashed ? 1 : 0) - (b.dashed ? 1 : 0));
+      for (const s of order) {
+        const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+        root.append(svg("path", {
+          class: "series", d, stroke: s.color, ...(s.dashed ? { "stroke-dasharray": "5 4", "stroke-width": 1.5 } : {}),
+        }));
+      }
     }
 
     if (directLabels) {
@@ -423,7 +437,9 @@ function lineChart(container, opt) {
       const overflow = ends.length ? ends[ends.length - 1].y - (m.t + ph) : 0;
       if (overflow > 0) for (const e of ends) e.y -= overflow;
       for (const e of ends) {
-        const t = svg("text", { class: "label", x: m.l + pw + 8, y: e.y + 4 });
+        root.append(svg("line", { x1: m.l + pw + 6, x2: m.l + pw + 14, y1: e.y, y2: e.y,
+          stroke: e.s.color, "stroke-width": 2.5, "stroke-linecap": "round", ...(e.s.dashed ? { "stroke-dasharray": "3 2" } : {}) }));
+        const t = svg("text", { class: "label", x: m.l + pw + 18, y: e.y + 4 });
         t.textContent = e.s.name;
         root.append(t);
       }
@@ -466,7 +482,7 @@ function lineChart(container, opt) {
       dot.setAttribute("visibility", show ? "visible" : "hidden");
       if (show) {
         dot.setAttribute("cx", geom.x(idx));
-        dot.setAttribute("cy", geom.y(opt.series[k].values[idx]));
+        dot.setAttribute("cy", geom.ys ? geom.ys(k, opt.series[k].values[idx]) : geom.y(opt.series[k].values[idx]));
       }
     });
     if (show) {

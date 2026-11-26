@@ -6,7 +6,8 @@ const LW = LightweightCharts;
 const state = {
   datasets: [], dataset: null, symbol: "", bars: [], events: null,
   alphas: [], functions: {}, variables: {}, current: null, ics: {},
-  evalResult: null, backtest: null,
+  evalResult: null, backtest: null, position: [], positionByTime: new Map(), eventByTime: new Map(),
+  markersZoomOnly: false, zoomedIn: false,
 };
 
 // ---------- helpers ----------
@@ -63,6 +64,11 @@ const chart = LW.createChart($("#chart"), {
   crosshair: { mode: LW.CrosshairMode.Normal },
   timeScale: { rightOffset: 6, minBarSpacing: 0.5 },
 });
+const posBand = chart.addSeries(LW.HistogramSeries, {
+  priceScaleId: "pos", lastValueVisible: false, priceLineVisible: false, base: 0,
+  autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 1 } }),
+}, 0);
+posBand.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false });
 const candle = chart.addSeries(LW.CandlestickSeries, { priceLineVisible: false }, 0);
 const volume = chart.addSeries(LW.HistogramSeries, {
   priceFormat: { type: "volume" }, priceScaleId: "vol", lastValueVisible: false, priceLineVisible: false,
@@ -72,6 +78,7 @@ candle.priceScale().applyOptions({ scaleMargins: { top: 0.12, bottom: 0.22 } });
 const alphaLine = chart.addSeries(LW.LineSeries, {
   lineWidth: 2, title: "alpha", priceLineVisible: false, priceFormat: { type: "price", precision: 3, minMove: 0.001 },
 }, 1);
+alphaLine.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0.1 } });
 const stratLine = chart.addSeries(LW.LineSeries, {
   lineWidth: 2, title: "策略", priceLineVisible: false, priceFormat: { type: "price", precision: 2, minMove: 0.01 },
 }, 2);
@@ -89,26 +96,30 @@ function layoutPanes() {
   panes[0]?.setStretchFactor(3);
   panes[1]?.setStretchFactor(hasAlpha ? 1 : 0.001);
   panes[2]?.setStretchFactor(hasEq ? 1.2 : 0.001);
-  // Pane heights update on the chart's next render, so measure after it (twice to be safe).
-  requestAnimationFrame(() => requestAnimationFrame(positionPaneLabels));
+  schedulePaneLabels();
+}
+
+// Pane heights update on the chart's next render, so measure after it (and again later to be safe).
+function schedulePaneLabels() {
+  requestAnimationFrame(() => requestAnimationFrame(() => { positionPaneLabels(); positionSplitLine(); }));
   setTimeout(positionPaneLabels, 120);
+  setTimeout(() => { positionPaneLabels(); positionSplitLine(); }, 400);
 }
 
 function positionPaneLabels() {
-  const heights = chart.panes().map((p) => p.getHeight());
-  const offset = $("#chart").offsetTop;
+  // Measure each pane's real DOM position instead of summing heights, which can lag a render.
+  const box = $("#chart"), base = box.getBoundingClientRect().top;
   const has = [true, alphaLine.data().length > 0, stratLine.data().length > 0];
-  let top = offset;
-  heights.forEach((h, i) => {
+  chart.panes().forEach((p, i) => {
     const label = $(`#pane-label-${i}`);
-    if (label) {
-      label.hidden = h < 40 || !has[i];
-      label.style.top = `${top + 6}px`;
-    }
-    top += h + 1;
+    if (!label) return;
+    const el = p.getHTMLElement();
+    const top = el ? el.getBoundingClientRect().top - base : 0;
+    label.hidden = p.getHeight() < 40 || !has[i];
+    label.style.top = `${box.offsetTop + top + 6}px`;
   });
 }
-new ResizeObserver(() => requestAnimationFrame(positionPaneLabels)).observe($("#chart"));
+new ResizeObserver(schedulePaneLabels).observe($("#chart"));
 $("#chart").addEventListener("pointerup", () => requestAnimationFrame(positionPaneLabels));
 
 function applyTheme() {
@@ -130,6 +141,7 @@ function applyTheme() {
   stratLine.applyOptions({ color: css("--series-1") });
   benchLine.applyOptions({ color: css("--bench") });
   renderVolume();
+  renderPosBand();
   renderMarkers();
 }
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
@@ -148,27 +160,64 @@ function renderVolume() {
   volume.setData(state.bars.map((b) => ({ time: b.time, value: b.volume, color: b.close >= b.open ? up : down })));
 }
 
+function renderPosBand() {
+  state.positionByTime = new Map(state.position.map((p) => [p.time, p.side]));
+  posBand.setData(state.bars.map(({ time }) => {
+    const side = state.positionByTime.get(time);
+    return side ? { time, value: 1, color: hexAlpha(css(side === "put" ? "--series-2" : "--series-1"), isDark() ? 0.12 : 0.08) } : { time };
+  }));
+}
+
+const visibleBars = () => {
+  const r = chart.timeScale().getVisibleLogicalRange();
+  return r ? r.to - r.from : Infinity;
+};
+
+function positionSplitLine() {
+  const line = $("#split-line"), split = $("#split").value, box = $("#chart");
+  const first = split && state.bars.find((b) => b.time >= split);
+  const x = first ? chart.timeScale().timeToCoordinate(first.time) : null;
+  const plotW = box.clientWidth - chart.priceScale("right").width();
+  if (x === null || x < 48 || x > plotW - 4) { line.hidden = true; return; }
+  line.hidden = false;
+  line.style.left = `${box.offsetLeft + Math.round(x)}px`;
+  line.style.top = `${box.offsetTop}px`;
+  line.style.height = `${box.clientHeight - chart.timeScale().height()}px`;
+}
+
 function renderMarkers() {
   const list = [];
   const ev = state.events;
-  const quiet = (state.tradeMarkers || []).length > 0; // trades shown: events keep only their dot
+  const trades = !state.markersZoomOnly || visibleBars() <= 250 ? state.tradeMarkers || [] : [];
+  const quiet = trades.length > 0;
   if (ev) {
-    for (const d of ev.dividends) list.push({ time: d.ex_date, position: "aboveBar", shape: "circle", color: css("--bench"), size: 0.6, text: quiet ? "" : `息 ${d.cash_per_share}` });
-    for (const s of ev.splits) list.push({ time: s.date, position: "aboveBar", shape: "square", color: css("--bench"), size: 0.6, text: quiet ? "" : `分割 1→${s.ratio}` });
+    for (const d of ev.dividends) list.push({ time: d.ex_date, position: "aboveBar", shape: "circle", color: css("--bench"), size: 0.6, text: quiet ? "" : "息" });
+    for (const s of ev.splits) list.push({ time: s.date, position: "aboveBar", shape: "square", color: css("--bench"), size: 0.6, text: quiet ? "" : "分割" });
   }
-  const split = $("#split").value;
-  if (split) {
-    const first = state.bars.find((b) => b.time >= split);
-    if (first) list.push({ time: first.time, position: "belowBar", shape: "arrowUp", color: css("--link"), text: "樣本外", size: 1 });
-  }
-  list.push(...(state.tradeMarkers || []));
+  list.push(...trades);
   list.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
   markers.setMarkers(list.filter((m) => state.bars.length && m.time >= state.bars[0].time));
+  positionSplitLine();
 }
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+  const zoomedIn = visibleBars() <= 250;
+  if (zoomedIn !== state.zoomedIn) {
+    state.zoomedIn = zoomedIn;
+    renderMarkers();
+  }
+  positionSplitLine();
+});
 
 function setThresholds(lines) {
   for (const l of thresholdLines) alphaLine.removePriceLine(l);
-  thresholdLines = lines.map(([price, title, color]) => alphaLine.createPriceLine({
+  const merged = [];
+  for (const [price, title, color] of lines) {
+    if (!Number.isFinite(price)) continue;
+    const m = merged.find((x) => Math.abs(x[0] - price) < 1e-12);
+    if (m) { m[1] += "/" + title; m[2] = css("--muted"); }
+    else merged.push([price, title, color]);
+  }
+  thresholdLines = merged.map(([price, title, color]) => alphaLine.createPriceLine({
     price, title, color, lineWidth: 1, lineStyle: LW.LineStyle.Dotted, axisLabelVisible: true,
   }));
 }
@@ -190,6 +239,9 @@ function updateLegend(param) {
   parts.push(el("span", { class: cls }, signedPct(bar.close / prev - 1)));
   const a = param?.seriesData?.get(alphaLine) ?? state.alphaByTime?.get(bar.time);
   if (a && a.value !== undefined) parts.push(el("span", {}, `alpha ${a.value.toFixed(4)}`));
+  const side = state.positionByTime.get(bar.time);
+  if (side) parts.push(el("span", { class: "k" }, side === "long" ? "持倉中" : side === "call" ? "持有買權" : "持有賣權"));
+  if (state.eventByTime.has(bar.time)) parts.push(el("span", { class: "k" }, state.eventByTime.get(bar.time)));
   legend.replaceChildren(...parts);
 }
 chart.subscribeCrosshairMove(updateLegend);
@@ -198,10 +250,11 @@ chart.subscribeCrosshairMove(updateLegend);
 async function loadDatasets(selectId) {
   state.datasets = await api("/api/datasets");
   const select = $("#dataset");
+  const yrs = (d) => d.first_date.slice(0, 4) === d.last_date.slice(0, 4)
+    ? d.first_date.slice(0, 4) : `${d.first_date.slice(0, 4)}–${d.last_date.slice(0, 4)}`;
   select.replaceChildren(...state.datasets.map((d) =>
-    el("option", { value: d.id }, d.kind === "options"
-      ? `TAIEX · 台指選擇權  ${d.first_date} ~ ${d.last_date}`
-      : `${d.symbol}  ${d.first_date} ~ ${d.last_date}`)));
+    el("option", { value: d.id, title: `${d.first_date} ~ ${d.last_date}` }, d.kind === "options"
+      ? `台指選擇權 TXO · ${yrs(d)}` : `${d.symbol} · ${yrs(d)}`)));
   if (!state.datasets.length) {
     $("#download-form").hidden = false;
     msg("#formula-msg", "還沒有資料，請先從 FinMind 下載。", "error");
@@ -224,18 +277,24 @@ async function loadBarsInner() {
   const id = $("#dataset").value;
   const d = state.datasets.find((x) => x.id === id);
   state.isOptions = d?.kind === "options";
-  candle.applyOptions({ priceFormat: state.isOptions
-    ? { type: "custom", minMove: 1, formatter: (p) => fmtPx(p, 0) }
-    : { type: "price", precision: 2, minMove: 0.01 } });
   document.querySelector('[data-tab="options"]').hidden = !state.isOptions;
   document.querySelector('[data-tab="strategy"]').hidden = state.isOptions;
   if (state.isOptions && !$("#tab-strategy").hidden) switchTab("options");
   if (!state.isOptions && !$("#tab-options").hidden) switchTab("strategy");
   state.dataset = id; // set before awaiting so in-flight results for the old dataset are dropped
   const data = await api(`/api/bars?dataset=${encodeURIComponent(id)}`);
+  const lo = Math.min(...data.bars.map((b) => b.low));
+  const fmt = (d) => (p) => (p < lo * 0.98 ? "" : fmtPx(p, d));
+  candle.applyOptions({ priceFormat: state.isOptions
+    ? { type: "custom", minMove: 1, formatter: fmt(0) }
+    : { type: "custom", minMove: 0.01, formatter: fmt(2) } });
   state.symbol = data.symbol;
   state.bars = data.bars;
   state.events = data.events;
+  state.eventByTime = new Map();
+  const event = (time, text) => state.eventByTime.set(time, [state.eventByTime.get(time), text].filter(Boolean).join("、"));
+  for (const d of data.events?.dividends || []) event(d.ex_date, `除息 ${d.cash_per_share}`);
+  for (const s of data.events?.splits || []) event(s.date, `分割 1→${s.ratio}`);
   state.barIndex = new Map(data.bars.map((b, i) => [b.time, i]));
   for (const input of ["#start", "#end", "#split"]) {
     $(input).min = d.first_date;
@@ -259,6 +318,9 @@ async function loadBarsInner() {
 function clearResults() {
   state.backtest = null;
   state.tradeMarkers = [];
+  state.markersZoomOnly = false;
+  state.position = [];
+  renderPosBand();
   if ($("#op-result")) $("#op-result").hidden = true;
   alphaLine.setData([]);
   stratLine.setData([]);
@@ -423,7 +485,7 @@ function renderEval(stats) {
   $("#q-title").textContent = `alpha 由低到高分 ${stats.quantiles} 組，隔日開盤起 ${h} 日平均報酬；分組界線只用樣本內資料。`;
   const q = (s) => s?.horizons?.[String(h)]?.quantile_returns?.map((x) => x.mean_fwd);
   quantileChart($("#quantile-chart"), q(is), q(oos));
-  $("#eval-note").textContent = stats.note || "";
+  $("#eval-note").textContent = (stats.note || "").replace(/\s*\([^()]*[A-Za-z]{4,}[^()]*\)\s*$/, "").replace(/。(?=.)/g, "。\n");
   if (state.current && is) {
     state.ics[state.current] = { is: is.horizons?.["5"]?.ic, oos: oos?.horizons?.["5"]?.ic };
     renderPool();
@@ -591,12 +653,24 @@ async function runBacktest(saveAs) {
     const out = await api("/api/backtest", backtestBody(saveAs));
     if (state.dataset !== requested) return;
     state.backtest = out;
-    const many = out.strategy.trades.length > 40; // many trades: arrows only, details in the table
+    const trades = out.strategy.trades.slice().sort((a, b) => a.date.localeCompare(b.date));
+    state.position = [];
+    let qty = 0, next = 0;
+    for (const bar of state.bars) {
+      while (next < trades.length && trades[next].date <= bar.time) {
+        const t = trades[next++];
+        qty += (t.side === "buy" ? 1 : -1) * Number(t.quantity);
+      }
+      if (qty > 0) state.position.push({ time: bar.time, side: "long" });
+    }
+    renderPosBand();
+    state.markersZoomOnly = trades.length > 40;
+    const many = state.markersZoomOnly;
     state.tradeMarkers = out.strategy.trades.map((t) => {
       const buy = t.side === "buy";
       const color = buy ? css("--series-1") : css("--series-2");
       return many
-        ? { time: t.date, position: buy ? "belowBar" : "aboveBar", shape: "circle", size: 0.5, color, text: "" }
+        ? { time: t.date, position: buy ? "belowBar" : "aboveBar", shape: buy ? "arrowUp" : "arrowDown", size: 0.8, color, text: "" }
         : { time: t.date, position: buy ? "belowBar" : "aboveBar", shape: buy ? "arrowUp" : "arrowDown", size: 0.8,
           color, text: buy ? "買" : "賣" };
     });
@@ -656,7 +730,7 @@ function renderBacktest(out) {
   table.replaceChildren(head1, head2, ...rows);
 
   const trades = out.strategy.trades;
-  $("#trade-count").textContent = `（${trades.length} 筆；價格為當時實際成交價，未做分割調整；點一列可跳到圖上）`;
+  $("#trade-count").textContent = `${trades.length} 筆`;
   const head = el("tr");
   for (const h of ["日期", "買賣", "股數", "價格", "成本"]) head.append(el("th", {}, h));
   $("#trade-table").replaceChildren(head, ...trades.slice().reverse().map((t) => {
@@ -734,6 +808,19 @@ async function runOptions(saveAs) {
     alphaLine.setData(out.alpha);
     const p = optionParams();
     setThresholds([[Number(p.long_entry), "多", css("--series-1")], [Number(p.short_entry), "空", css("--series-2")]]);
+    const trades = out.trades.slice().sort((a, b) => a.date.localeCompare(b.date));
+    state.position = [];
+    let side = null, next = 0;
+    for (const bar of state.bars) {
+      while (next < trades.length && trades[next].date <= bar.time) {
+        const t = trades[next++];
+        if (t.action === "open") side = t.call_put;
+        else if (t.action === "close" || t.action === "expire") side = null;
+      }
+      if (side) state.position.push({ time: bar.time, side });
+    }
+    renderPosBand();
+    state.markersZoomOnly = false;
     state.tradeMarkers = out.trades.filter((t) => t.action !== "missed").map((t) => {
       if (t.action === "open") {
         const call = t.call_put === "call";
@@ -746,18 +833,29 @@ async function runOptions(saveAs) {
     renderMarkers();
     metricsTable($("#op-table"), out, "選擇權策略", "加權指數");
     const s = out.summary;
-    $("#op-summary").textContent = `進場 ${s.entries} 次（買權 ${s.calls}、賣權 ${s.puts}），到期結算 ${s.expired} 次（歸零 ${s.expired_worthless}），`
-      + `未成交 ${s.missed} 次，交易成本 ${money(s.costs)}，權利金支出 ${money(s.premium_paid)}、收回 ${money(s.premium_received)}。`
-      + "到期結算價以當日加權指數收盤近似（官方為收盤前 30 分鐘平均）。";
+    const figures = [
+      ["進場", `${s.entries} 次（${s.calls}C／${s.puts}P）`],
+      ["到期結算", `${s.expired} 次（歸零 ${s.expired_worthless}）`],
+      ["未成交", `${s.missed} 次`], ["交易成本", money(s.costs)],
+      ["權利金支出", money(s.premium_paid)], ["權利金收回", money(s.premium_received)],
+    ];
+    $("#op-summary").replaceChildren(...figures.map(([label, value]) => {
+      const pair = el("div");
+      pair.append(el("dt", {}, label), el("dd", { title: value }, value));
+      return pair;
+    }));
     $("#op-result").hidden = false;
-    $("#op-trade-count").textContent = `（${out.trades.length} 筆；點一列可看當天契約鏈）`;
+    $("#op-trade-count").textContent = `${out.trades.length} 筆`;
     const head = el("tr");
-    for (const h of ["日期", "動作", "契約", "履約價", "口數", "價格", "說明"]) head.append(el("th", {}, h));
+    for (const h of ["日期", "動作", "契約", "口數", "價格"]) head.append(el("th", {}, h));
     $("#op-trades").replaceChildren(head, ...out.trades.slice().reverse().map((t) => {
-      const tr = el("tr");
-      tr.append(el("td", {}, t.date), el("td", { class: "txt" }, ACTION[t.action] || t.action),
-        el("td", { class: "txt" }, `${t.contract} ${t.call_put === "call" ? "買權" : "賣權"}`), el("td", {}, Number(t.strike).toFixed(0)),
-        el("td", {}, String(t.contracts)), el("td", {}, Number(t.price).toFixed(1)), el("td", { class: "txt wrap" }, t.reason));
+      const tr = el("tr", { title: t.reason || "" });
+      const action = ACTION[t.action] || t.action;
+      const actionCell = el("td", { class: "txt wrap" }, action);
+      if (t.reason && t.reason !== action) actionCell.append(el("span", { class: "why" }, t.reason));
+      tr.append(el("td", {}, t.date), actionCell,
+        el("td", { class: "txt mono" }, `${t.contract} ${t.call_put === "call" ? "C" : "P"}${Number(t.strike).toFixed(0)}`),
+        el("td", {}, String(t.contracts)), el("td", {}, Number(t.price).toFixed(1)));
       return clickableRow(tr, () => { focusDate(t.date); loadChain(t.date, t.contract); });
     }));
     msg("#options-msg", (s.reconciled ? "帳本每日核對一致" : "⚠ 帳本核對失敗，結果不可信") + (out.saved ? `；已存成報告「${out.saved}」` : ""),

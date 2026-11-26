@@ -43,7 +43,7 @@
   <div class="layout">
     <aside class="pool" aria-label="Alpha 池">
       <div class="pool-head">
-        <h2>Alpha 池</h2>
+        <h2 title="IC = alpha 與「隔日開盤起 5 日報酬」的相關係數；樣本內／樣本外分開計算。">Alpha 池</h2>
         <div class="pool-actions">
           <button type="button" class="ghost small" id="eval-all" title="以 5 日預測期評估池內所有公式">全部評估</button>
           <button type="button" class="small" id="new-alpha">＋ 新公式</button>
@@ -58,6 +58,7 @@
       <div id="chart" class="chart"></div>
       <div class="pane-label" id="pane-label-1" hidden>alpha</div>
       <div class="pane-label" id="pane-label-2" hidden>淨值指數　<i class="key k-strat"></i>策略　<i class="key k-bench"></i>買入持有</div>
+      <div class="split-line" id="split-line" hidden><span>樣本外 →</span></div>
       <p class="tiny muted chart-note">價格為分割調整後（僅顯示用）；訊號以不含未來資訊的方式另行計算。</p>
     </section>
 
@@ -86,7 +87,7 @@
           <h3>分組報酬</h3>
           <p class="note" id="q-title"></p>
           <div id="quantile-chart" class="qchart"></div>
-          <p class="note" id="eval-note"></p>
+          <details class="section"><summary>計算方式與注意事項</summary><p class="note" id="eval-note"></p></details>
         </div>
         <details class="ref section">
           <summary>函數與變數</summary>
@@ -132,6 +133,7 @@
         <div id="bt-result" hidden>
           <div class="table-wrap"><table class="stats" id="bt-table"></table></div>
           <h3>成交紀錄 <span class="muted tiny" id="trade-count"></span></h3>
+          <p class="note">價格為當時實際成交價，未做分割調整；點一列可跳到圖上。</p>
           <div class="table-wrap trades"><table class="stats" id="trade-table"></table></div>
         </div>
       </section>
@@ -176,8 +178,9 @@
         <p id="options-msg" class="msg" role="status"></p>
         <div id="op-result" hidden>
           <div class="table-wrap"><table class="stats" id="op-table"></table></div>
-          <p class="note" id="op-summary"></p>
-          <h3>交易紀錄 <span class="muted tiny" id="op-trade-count"></span></h3>
+          <dl class="kv" id="op-summary"></dl><p class="note">到期結算價以當日加權指數收盤近似（官方為收盤前 30 分鐘平均）。</p>
+          <h3>成交紀錄 <span class="muted tiny" id="op-trade-count"></span></h3>
+          <p class="note">點一列可看當天契約鏈。</p>
           <div class="table-wrap trades"><table class="stats" id="op-trades"></table></div>
         </div>
         <h3>契約鏈 <span class="muted tiny">點圖上任一天可切換日期</span></h3>
