@@ -209,6 +209,8 @@ def make_handler(root: Path, workbench: Workbench | None = None
                     "/api/datasets": lambda: workbench.datasets(),
                     "/api/bars": lambda: workbench.bars(query.get("dataset", "")),
                     "/api/alphas": lambda: workbench.alphas(),
+                    "/api/options/chain": lambda: workbench.options_chain(
+                        query.get("date", ""), query.get("contract")),
                 }
                 if path in routes:
                     return self._call(routes[path])
@@ -245,6 +247,10 @@ def make_handler(root: Path, workbench: Workbench | None = None
                 return self._call(lambda: workbench.backtest(body))
             if method == "POST" and path == "/api/alpha/evaluate":
                 return self._call(lambda: workbench.evaluate(body))
+            if method == "POST" and path == "/api/options/backtest":
+                return self._call(lambda: workbench.options_backtest(body))
+            if method == "POST" and path == "/api/options/download":
+                return self._call(lambda: workbench.options_download(body))
             if method == "POST" and path == "/api/data/download":
                 return self._call(lambda: workbench.download(body))
             if method == "PUT" and alpha:

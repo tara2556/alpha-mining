@@ -14,12 +14,12 @@ import math
 import os
 import re
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from finback import finmind
+from finback import finmind, options_data
 from finback.engine import BacktestResult, CostModel, run_backtest, write_result
 from finback.prices import DailyPrice, load_prices
 from finback.strategies import AlphaRule, BuyAndHold, build
@@ -28,6 +28,7 @@ D = Decimal
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}$")
 REPORT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,60}$")
 SYMBOL = re.compile(r"^[0-9A-Za-z]{2,10}$")
+OPTIONS_ID = "finmind_TXO"
 
 
 class ApiError(Exception):
@@ -56,23 +57,40 @@ class Workbench:
                         "rows": meta["rows"],
                         "splits": len(meta["corporate_actions"]["splits"]),
                         "dividends": len(meta["corporate_actions"]["dividends"])})
+        if (self.data_dir / options_data.FOLDER / "metadata.json").exists():
+            cov = json.loads((self.data_dir / options_data.FOLDER / "metadata.json")
+                             .read_text(encoding="utf-8")).get("coverage") or {}
+            if cov:
+                out.append({"id": OPTIONS_ID, "symbol": "TAIEX", "kind": "options",
+                            "first_date": cov["start"], "last_date": cov["end"]})
         return out
+
+    def _chain(self) -> options_data.OptionChain:
+        if not hasattr(self, "_chain_cache"):
+            self._chain_cache = None
+        try:
+            folder = self.data_dir / options_data.FOLDER
+            stamp = (folder / "metadata.json").stat().st_mtime
+            if self._chain_cache is None or self._chain_cache[0] != stamp:
+                self._chain_cache = (stamp, options_data.load_chain(self.root))
+            return self._chain_cache[1]
+        except FileNotFoundError as exc:
+            raise ApiError("還沒有台指選擇權資料，請先下載", 404) from exc
 
     def _prices(self, dataset: str, start: str | None = None,
                 end: str | None = None) -> tuple[list[DailyPrice], dict]:
+        if dataset == OPTIONS_ID:
+            chain = self._chain()
+            prices = _between(chain.underlying, start, end)
+            return prices, {"symbol": "TAIEX", "csv_sha256": chain.meta["underlying"]["csv_sha256"],
+                            "corporate_actions": {"dividends": [], "splits": []}}
         if dataset not in {d["id"] for d in self.datasets()}:
             raise ApiError(f"找不到資料集：{dataset}", 404)
         path = self.data_dir / f"{dataset}.csv"
         meta = json.loads(path.with_suffix(".metadata.json").read_text(encoding="utf-8"))
         if hashlib.sha256(path.read_bytes()).hexdigest() != meta["csv_sha256"]:
             raise ApiError("CSV 與 metadata 雜湊不符，請重新下載", 409)
-        prices = load_prices(path)
-        lo = date.fromisoformat(start) if start else None
-        hi = date.fromisoformat(end) if end else None
-        prices = [p for p in prices if (lo is None or p.date >= lo) and (hi is None or p.date <= hi)]
-        if len(prices) < 2:
-            raise ApiError("選取期間內的交易日不足")
-        return prices, meta
+        return _between(load_prices(path), start, end), meta
 
     def bars(self, dataset: str) -> dict:
         """Chart bars, back-adjusted for splits only (display; signals use causal data)."""
@@ -177,8 +195,121 @@ class Workbench:
         stats = evaluate_alpha(prices, values, horizons, split)
         return {"series": _series(prices, values), "stats": stats}
 
+    # ---------- options ----------
+    def options_download(self, body: dict) -> dict:
+        try:
+            start, end = date.fromisoformat(body["start"]), date.fromisoformat(body["end"])
+        except (KeyError, ValueError) as exc:
+            raise ApiError("start / end 需為 YYYY-MM-DD") from exc
+        if start > end:
+            raise ApiError("開始日不可晚於結束日")
+        options_data.download(start, end, self.root, log=lambda *_: None)
+        return {"id": OPTIONS_ID}
+
+    def options_chain(self, day: str, contract: str | None) -> dict:
+        chain = self._chain()
+        try:
+            when = date.fromisoformat(day)
+        except ValueError as exc:
+            raise ApiError("日期需為 YYYY-MM-DD") from exc
+        quotes = chain.quotes(when)
+        if not quotes:
+            raise ApiError(f"{day} 沒有選擇權資料（非交易日或未下載）", 404)
+        contracts = sorted({q.contract for q in quotes}, key=lambda c: (chain.calendar.expiry(c), c))
+        pick = contract if contract in contracts else contracts[0]
+        rows: dict[str, dict] = {}
+        for q in quotes:
+            if q.contract != pick:
+                continue
+            row = rows.setdefault(str(q.strike), {"strike": float(q.strike)})
+            row[q.call_put] = {"open": float(q.open), "close": float(q.close),
+                               "volume": q.volume, "oi": q.open_interest,
+                               "settle": float(q.settlement_price)}
+        spot = next((p.close for p in chain.underlying if p.date == when), None)
+        return {"date": day, "contract": pick, "expiry": chain.calendar.expiry(pick).isoformat(),
+                "contracts": [{"code": c, "expiry": chain.calendar.expiry(c).isoformat()}
+                              for c in contracts],
+                "spot": float(spot) if spot is not None else None,
+                "rows": sorted(rows.values(), key=lambda r: r["strike"])}
+
+    def options_backtest(self, body: dict) -> dict:
+        from finback.options_engine import OptionParams, run_options_backtest, write_options_result
+        chain = self._chain()
+        split = _optional_date(body.get("split_date"))
+        raw = dict(body.get("params") or {})
+        try:
+            for k in ("premium_fraction", "commission", "tax_rate", "initial_cash"):
+                if k in raw:
+                    raw[k] = D(str(raw[k]))
+            for k in ("long_entry", "long_exit", "short_entry", "short_exit"):
+                if k in raw:
+                    raw[k] = float(raw[k])
+            for k in ("moneyness_steps", "min_days_to_expiry", "roll_days"):
+                if k in raw:
+                    raw[k] = int(raw[k])
+            if "allow_puts" in raw:
+                raw["allow_puts"] = bool(raw["allow_puts"])
+            params = OptionParams(**raw)
+            result = run_options_backtest(chain, str(body.get("expr", "")), params,
+                                          self.pool_map(), _optional_date(body.get("start")),
+                                          _optional_date(body.get("end")))
+        except TypeError as exc:
+            raise ApiError(f"參數錯誤：{exc}") from exc
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
+        rows = result.rows
+        base = rows[0].underlying_close / (1 + rows[0].underlying_return)
+        view = [_View(r.date, r.daily_return, r.position_value / r.equity if r.equity else D(0))
+                for r in rows]
+        bench = [_View(r.date, r.underlying_return, D(1)) for r in rows]
+        metrics = {"full": _stats(view, result.trades, None, None)}
+        bmetrics = {"full": _stats(bench, [], None, None)}
+        if split:
+            metrics |= {"in_sample": _stats(view, result.trades, None, split),
+                        "out_of_sample": _stats(view, result.trades, split, None)}
+            bmetrics |= {"in_sample": _stats(bench, [], None, split),
+                         "out_of_sample": _stats(bench, [], split, None)}
+        response = {
+            "split_date": split.isoformat() if split else None,
+            "summary": result.metrics,
+            "strategy": {"metrics": metrics,
+                         "wealth": [{"time": r.date.isoformat(), "value": float(r.wealth_index)}
+                                    for r in rows]},
+            "benchmark": {"metrics": bmetrics,
+                          "wealth": [{"time": r.date.isoformat(),
+                                      "value": float(r.underlying_close / base)} for r in rows]},
+            "alpha": [{"time": r.date.isoformat()} | ({} if r.alpha is None else {"value": r.alpha})
+                      for r in rows],
+            "trades": [{k: str(v) if isinstance(v, Decimal) else v for k, v in asdict(t).items()}
+                       for t in result.trades],
+        }
+        name = body.get("save_as")
+        if name:
+            if not REPORT_NAME.match(str(name)):
+                raise ApiError("報告名稱只能用英文字母、數字、- 與 _")
+            folder = self.reports / name
+            folder.mkdir(parents=True, exist_ok=True)
+            for old in folder.glob("*.csv"):
+                old.unlink()
+            write_options_result(result, folder, "txo")
+            run = {"kind": "options_backtest", "synthetic": False, "labels": {"txo": f"TXO：{result.expr}"},
+                   "request": body, "summary": result.metrics,
+                   "data_provenance": {"provider": "FinMind", "symbol": "TXO",
+                                       "coverage": chain.meta.get("coverage"),
+                                       "settlement_source": result.settlement_source},
+                   "execution": "signal after close t, contract chosen with day-t data, filled at "
+                                "the contract open on t+1; no quote -> missed",
+                   "limitations": "day session only, no slippage beyond open price, final "
+                                  "settlement approximated by the TAIEX close"}
+            (folder / "run.json").write_text(json.dumps(run, indent=2, ensure_ascii=False) + "\n",
+                                             encoding="utf-8")
+            response["saved"] = name
+        return response
+
     # ---------- backtest ----------
     def backtest(self, body: dict) -> dict:
+        if body.get("dataset") == OPTIONS_ID:
+            raise ApiError("加權指數無法直接買賣，請改用「選擇權」頁回測")
         prices, meta = self._prices(body.get("dataset", ""), body.get("start"), body.get("end"))
         split = _optional_date(body.get("split_date"))
         try:
@@ -228,6 +359,26 @@ class Workbench:
         (folder / "run.json").write_text(json.dumps(run, indent=2, ensure_ascii=False) + "\n",
                                          encoding="utf-8")
         return name
+
+
+@dataclass(frozen=True)
+class _View:
+    """Minimal row shape for _stats (date, daily_return, gross_exposure)."""
+    date: date
+    daily_return: Decimal
+    gross_exposure: Decimal
+
+
+def _between(prices: list[DailyPrice], start: str | None, end: str | None) -> list[DailyPrice]:
+    try:
+        lo = date.fromisoformat(start) if start else None
+        hi = date.fromisoformat(end) if end else None
+    except ValueError as exc:
+        raise ApiError("日期需為 YYYY-MM-DD") from exc
+    out = [p for p in prices if (lo is None or p.date >= lo) and (hi is None or p.date <= hi)]
+    if len(out) < 2:
+        raise ApiError("選取期間內的交易日不足")
+    return out
 
 
 def _optional_date(value) -> date | None:

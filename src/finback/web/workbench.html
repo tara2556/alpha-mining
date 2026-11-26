@@ -24,8 +24,11 @@
   </header>
 
   <form id="download-form" class="download" hidden>
-    <strong>從 FinMind 下載日線</strong>
-    <label class="field inline"><span>代號</span><input id="dl-symbol" value="0050" size="6" required></label>
+    <strong>從 FinMind 下載</strong>
+    <label class="field inline"><span>類型</span>
+      <select id="dl-kind"><option value="stock">股票／ETF 日線</option><option value="options">台指選擇權（含加權指數）</option></select>
+    </label>
+    <label class="field inline" id="dl-symbol-field"><span>代號</span><input id="dl-symbol" value="0050" size="6"></label>
     <label class="field inline"><span>起</span><input type="date" id="dl-start" value="2020-01-01" required></label>
     <label class="field inline"><span>迄</span><input type="date" id="dl-end" required></label>
     <button type="submit">下載</button>
@@ -57,6 +60,7 @@
       <div class="tabs" role="tablist">
         <button type="button" role="tab" data-tab="formula" aria-selected="true">公式</button>
         <button type="button" role="tab" data-tab="strategy" aria-selected="false">策略回測</button>
+        <button type="button" role="tab" data-tab="options" aria-selected="false" hidden>選擇權</button>
       </div>
 
       <section class="tab" id="tab-formula">
@@ -118,6 +122,45 @@
           <h3>成交紀錄 <span class="muted tiny" id="trade-count"></span></h3>
           <div class="table-wrap trades"><table class="stats" id="trade-table"></table></div>
         </div>
+      </section>
+
+      <section class="tab" id="tab-options" hidden>
+        <p class="muted tiny">用「公式」頁目前的 alpha（以加權指數計算）決定方向：偏多買買權、偏空買賣權，其餘空手。
+          收盤後產生訊號並以當日資訊選約，隔日以該契約開盤價成交；沒有成交量就不成交。</p>
+        <div class="grid2" id="op-params">
+          <label class="field"><span>偏多進場（alpha &gt;）</span><input type="number" data-op="long_entry" value="0.01" step="0.005"></label>
+          <label class="field"><span>偏多出場（alpha &lt;）</span><input type="number" data-op="long_exit" value="0" step="0.005"></label>
+          <label class="field"><span>偏空進場（alpha &lt;）</span><input type="number" data-op="short_entry" value="-0.01" step="0.005"></label>
+          <label class="field"><span>偏空出場（alpha &gt;）</span><input type="number" data-op="short_exit" value="0" step="0.005"></label>
+          <label class="field"><span>契約</span><select data-op="series"><option value="monthly">只用月選</option><option value="all">含週選</option></select></label>
+          <label class="field"><span>價外檔數（0 = 價平）</span><input type="number" data-op="moneyness_steps" value="0" step="1"></label>
+          <label class="field"><span>最短到期天數</span><input type="number" data-op="min_days_to_expiry" value="10" step="1" min="0"></label>
+          <label class="field"><span>到期前換月天數</span><input type="number" data-op="roll_days" value="2" step="1" min="0"></label>
+          <label class="field"><span>每次權利金占淨值</span><input type="number" data-op="premium_fraction" value="0.05" step="0.01" min="0.01" max="1"></label>
+          <label class="field"><span>本金</span><input type="number" data-op="initial_cash" value="1000000" step="10000" min="1"></label>
+          <label class="field"><span>每口手續費（單邊）</span><input type="number" data-op="commission" value="25" step="1" min="0"></label>
+          <label class="field"><span>交易稅率</span><input type="number" data-op="tax_rate" value="0.001" step="0.0005" min="0"></label>
+        </div>
+        <label class="toggle"><input type="checkbox" data-op="allow_puts" checked> 偏空時買賣權</label>
+        <div class="row">
+          <button type="button" id="op-run">執行選擇權回測</button>
+          <input id="op-save-name" placeholder="報告名稱（選填）" size="14" aria-label="選擇權報告名稱">
+          <button type="button" class="ghost" id="op-save">另存報告</button>
+        </div>
+        <p id="options-msg" class="msg" role="status"></p>
+        <div id="op-result" hidden>
+          <div class="table-wrap"><table class="stats" id="op-table"></table></div>
+          <p class="muted tiny" id="op-summary"></p>
+          <h3>交易紀錄 <span class="muted tiny" id="op-trade-count"></span></h3>
+          <div class="table-wrap trades"><table class="stats" id="op-trades"></table></div>
+        </div>
+        <h3>契約鏈 <span class="muted tiny">點圖上任一天可切換日期</span></h3>
+        <div class="row">
+          <input type="date" id="chain-date" aria-label="契約鏈日期">
+          <select id="chain-contract" aria-label="契約月份"></select>
+        </div>
+        <p class="muted tiny" id="chain-info"></p>
+        <div class="table-wrap trades"><table class="stats chain" id="chain-table"></table></div>
       </section>
     </aside>
   </div>

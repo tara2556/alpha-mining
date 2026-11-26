@@ -116,15 +116,7 @@ function renderMarkers() {
     const first = state.bars.find((b) => b.time >= split);
     if (first) list.push({ time: first.time, position: "aboveBar", shape: "arrowDown", color: css("--accent"), text: "樣本外 →" });
   }
-  const trades = state.backtest?.strategy.trades || [];
-  const labelled = trades.length <= 40; // many trades: arrows only, details in the table
-  for (const t of trades) {
-    const buy = t.side === "buy";
-    list.push({
-      time: t.date, position: buy ? "belowBar" : "aboveBar", shape: buy ? "arrowUp" : "arrowDown",
-      color: buy ? css("--series-1") : css("--series-2"), text: labelled ? (buy ? "買" : "賣") : "",
-    });
-  }
+  list.push(...(state.tradeMarkers || []));
   list.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
   markers.setMarkers(list.filter((m) => state.bars.length && m.time >= state.bars[0].time));
 }
@@ -160,7 +152,9 @@ async function loadDatasets(selectId) {
   state.datasets = await api("/api/datasets");
   const select = $("#dataset");
   select.replaceChildren(...state.datasets.map((d) =>
-    el("option", { value: d.id }, `${d.symbol}  ${d.first_date} ~ ${d.last_date}`)));
+    el("option", { value: d.id }, d.kind === "options"
+      ? `TAIEX · 台指選擇權  ${d.first_date} ~ ${d.last_date}`
+      : `${d.symbol}  ${d.first_date} ~ ${d.last_date}`)));
   if (!state.datasets.length) {
     $("#download-form").hidden = false;
     msg("#formula-msg", "還沒有資料，請先從 FinMind 下載。", "error");
@@ -173,6 +167,11 @@ async function loadDatasets(selectId) {
 async function loadBars() {
   const id = $("#dataset").value;
   const d = state.datasets.find((x) => x.id === id);
+  state.isOptions = d?.kind === "options";
+  document.querySelector('[data-tab="options"]').hidden = !state.isOptions;
+  document.querySelector('[data-tab="strategy"]').hidden = state.isOptions;
+  if (state.isOptions && !$("#tab-strategy").hidden) switchTab("options");
+  if (!state.isOptions && !$("#tab-options").hidden) switchTab("strategy");
   const data = await api(`/api/bars?dataset=${encodeURIComponent(id)}`);
   state.dataset = id;
   state.symbol = data.symbol;
@@ -199,6 +198,8 @@ async function loadBars() {
 
 function clearResults() {
   state.backtest = null;
+  state.tradeMarkers = [];
+  if ($("#op-result")) $("#op-result").hidden = true;
   alphaLine.setData([]);
   stratLine.setData([]);
   benchLine.setData([]);
@@ -216,15 +217,21 @@ $("#open-download").addEventListener("click", () => {
   $("#dl-symbol").focus();
 });
 $("#dl-cancel").addEventListener("click", () => { $("#download-form").hidden = true; });
+$("#dl-kind").addEventListener("change", () => {
+  $("#dl-symbol-field").hidden = $("#dl-kind").value === "options";
+  if ($("#dl-kind").value === "options") $("#dl-status").textContent = "每個月一次請求（約 10 MB），一年約需 1 分鐘；已下載的月份會略過";
+});
 $("#download-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = event.submitter;
   await busy(button, async () => {
     $("#dl-status").textContent = "下載中…（每個資料集一次請求，可能需要一分鐘）";
     try {
-      const out = await api("/api/data/download", {
-        symbol: $("#dl-symbol").value.trim(), start: $("#dl-start").value, end: $("#dl-end").value,
-      });
+      const out = $("#dl-kind").value === "options"
+        ? await api("/api/options/download", { start: $("#dl-start").value, end: $("#dl-end").value })
+        : await api("/api/data/download", {
+          symbol: $("#dl-symbol").value.trim(), start: $("#dl-start").value, end: $("#dl-end").value,
+        });
       $("#dl-status").textContent = "完成";
       $("#download-form").hidden = true;
       await loadDatasets(out.id);
@@ -510,6 +517,12 @@ async function runBacktest(saveAs) {
   try {
     const out = await api("/api/backtest", backtestBody(saveAs));
     state.backtest = out;
+    const many = out.strategy.trades.length > 40; // many trades: arrows only, details in the table
+    state.tradeMarkers = out.strategy.trades.map((t) => {
+      const buy = t.side === "buy";
+      return { time: t.date, position: buy ? "belowBar" : "aboveBar", shape: buy ? "arrowUp" : "arrowDown",
+        color: buy ? css("--series-1") : css("--series-2"), text: many ? "" : (buy ? "買" : "賣") };
+    });
     stratLine.setData(out.strategy.wealth);
     benchLine.setData(out.benchmark.wealth);
     if (out.alpha) {
@@ -591,7 +604,136 @@ function switchTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
   $("#tab-formula").hidden = name !== "formula";
   $("#tab-strategy").hidden = name !== "strategy";
+  $("#tab-options").hidden = name !== "options";
+  if (name === "options" && !$("#chain-date").value && state.bars.length) loadChain(state.bars.at(-1).time);
 }
+
+// ---------- options ----------
+function optionParams() {
+  const out = {};
+  for (const input of document.querySelectorAll("[data-op]")) {
+    out[input.dataset.op] = input.type === "checkbox" ? input.checked : input.value;
+  }
+  return out;
+}
+
+function metricsTable(table, out, leftLabel, rightLabel) {
+  const segs = out.split_date ? [["in_sample", "樣本內"], ["out_of_sample", "樣本外"]] : [["full", "全期"]];
+  const head1 = el("tr"), head2 = el("tr");
+  head1.append(el("th", {}, ""));
+  head2.append(el("th", {}, "指標"));
+  for (const label of [leftLabel, rightLabel]) {
+    head1.append(el("th", { class: "grp", colspan: segs.length }, label));
+    for (const [, s] of segs) head2.append(el("th", {}, s));
+  }
+  const rows = [
+    ["總報酬", "total_return", (v) => signedPct(v)], ["年化報酬", "cagr", (v) => signedPct(v)],
+    ["年化波動", "volatility", (v) => pct(v)], ["Sharpe", "sharpe", (v) => fix(v, 2)],
+    ["最大回撤", "max_drawdown", (v) => pct(v)], ["平均曝險", "exposure", (v) => pct(v, 0)],
+  ].map(([label, key, f]) => {
+    const tr = el("tr");
+    tr.append(el("td", {}, label));
+    for (const side of [out.strategy, out.benchmark]) for (const [k] of segs) tr.append(el("td", {}, f(side.metrics[k]?.[key])));
+    return tr;
+  });
+  table.replaceChildren(head1, head2, ...rows);
+}
+
+const ACTION = { open: "買進", close: "賣出", expire: "到期結算", missed: "未成交" };
+
+async function runOptions(saveAs) {
+  const expr = $("#alpha-expr").value.trim();
+  if (!expr) { msg("#options-msg", "請先在「公式」頁輸入或選擇一個 alpha", "error"); return; }
+  try {
+    const out = await api("/api/options/backtest", {
+      start: $("#start").value || null, end: $("#end").value || null, split_date: $("#split").value || null,
+      expr, params: optionParams(), ...(saveAs ? { save_as: saveAs } : {}),
+    });
+    state.backtest = out;
+    stratLine.setData(out.strategy.wealth);
+    benchLine.setData(out.benchmark.wealth);
+    state.alphaByTime = new Map(out.alpha.filter((p) => p.value !== undefined).map((p) => [p.time, p]));
+    alphaLine.setData(out.alpha);
+    const p = optionParams();
+    setThresholds([[Number(p.long_entry), "多", css("--series-1")], [Number(p.short_entry), "空", css("--series-2")]]);
+    state.tradeMarkers = out.trades.filter((t) => t.action !== "missed").map((t) => {
+      if (t.action === "open") {
+        const call = t.call_put === "call";
+        return { time: t.date, position: call ? "belowBar" : "aboveBar", shape: call ? "arrowUp" : "arrowDown",
+          color: call ? css("--series-1") : css("--series-2"), text: `${call ? "C" : "P"}${Number(t.strike)}` };
+      }
+      return { time: t.date, position: "aboveBar", shape: "circle", color: css("--bench"), text: t.action === "expire" ? "結算" : "平" };
+    });
+    layoutPanes();
+    renderMarkers();
+    metricsTable($("#op-table"), out, "選擇權策略", "加權指數");
+    const s = out.summary;
+    $("#op-summary").textContent = `進場 ${s.entries} 次（買權 ${s.calls}、賣權 ${s.puts}），到期結算 ${s.expired} 次（歸零 ${s.expired_worthless}），`
+      + `未成交 ${s.missed} 次，交易成本 ${money(s.costs)}，權利金支出 ${money(s.premium_paid)}、收回 ${money(s.premium_received)}。`
+      + "到期結算價以當日加權指數收盤近似（官方為收盤前 30 分鐘平均）。";
+    $("#op-result").hidden = false;
+    $("#op-trade-count").textContent = `（${out.trades.length} 筆；點一列可看當天契約鏈）`;
+    const head = el("tr");
+    for (const h of ["日期", "動作", "契約", "履約價", "口數", "價格", "說明"]) head.append(el("th", {}, h));
+    $("#op-trades").replaceChildren(head, ...out.trades.slice().reverse().map((t) => {
+      const tr = el("tr");
+      tr.append(el("td", {}, t.date), el("td", {}, ACTION[t.action] || t.action),
+        el("td", {}, `${t.contract} ${t.call_put === "call" ? "買權" : "賣權"}`), el("td", {}, Number(t.strike).toFixed(0)),
+        el("td", {}, String(t.contracts)), el("td", {}, Number(t.price).toFixed(1)), el("td", {}, t.reason));
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", () => { focusDate(t.date); loadChain(t.date, t.contract); });
+      return tr;
+    }));
+    msg("#options-msg", (s.reconciled ? "帳本每日核對一致" : "⚠ 帳本核對失敗，結果不可信") + (out.saved ? `；已存成報告「${out.saved}」` : ""),
+      s.reconciled ? "ok" : "error");
+  } catch (e) {
+    msg("#options-msg", e.message, "error");
+  }
+}
+$("#op-run").addEventListener("click", () => busy($("#op-run"), () => runOptions()));
+$("#op-save").addEventListener("click", () => busy($("#op-save"), () => {
+  const name = $("#op-save-name").value.trim();
+  if (!name) { msg("#options-msg", "請輸入報告名稱（英文、數字、- 或 _）", "error"); return null; }
+  return runOptions(name);
+}));
+
+async function loadChain(day, contract) {
+  if (!state.isOptions || !day) return;
+  try {
+    const q = new URLSearchParams({ date: day, ...(contract ? { contract } : {}) });
+    const out = await api(`/api/options/chain?${q}`);
+    $("#chain-date").value = out.date;
+    $("#chain-contract").replaceChildren(...out.contracts.map((c) =>
+      el("option", { value: c.code }, `${c.code}（到期 ${c.expiry}）`)));
+    $("#chain-contract").value = out.contract;
+    $("#chain-info").textContent = out.spot ? `加權指數收盤 ${out.spot.toLocaleString("zh-TW")}；價格為日盤收盤，量為日盤成交口數` : "";
+    const head = el("tr");
+    for (const [h, cls] of [["買權量", ""], ["買權收", ""], ["履約價", "mid"], ["賣權收", ""], ["賣權量", ""]]) head.append(el("th", { class: cls }, h));
+    const atm = out.spot === null ? null
+      : out.rows.reduce((best, r) => (best === null || Math.abs(r.strike - out.spot) < Math.abs(best - out.spot) ? r.strike : best), null);
+    const cell = (x, k) => (x && x[k] ? (k === "volume" ? x[k].toLocaleString("zh-TW") : x[k].toFixed(1)) : "—");
+    $("#chain-table").replaceChildren(head, ...out.rows.map((r) => {
+      const tr = el("tr", r.strike === atm ? { class: "atm" } : {});
+      tr.append(el("td", {}, cell(r.call, "volume")), el("td", {}, cell(r.call, "close")), el("td", { class: "mid" }, r.strike.toFixed(0)),
+        el("td", {}, cell(r.put, "close")), el("td", {}, cell(r.put, "volume")));
+      return tr;
+    }));
+    const atmRow = $("#chain-table tr.atm");
+    if (atmRow) atmRow.scrollIntoView({ block: "center" });
+  } catch (e) {
+    $("#chain-info").textContent = e.message;
+    $("#chain-table").replaceChildren();
+  }
+}
+$("#chain-date").addEventListener("change", () => loadChain($("#chain-date").value));
+$("#chain-contract").addEventListener("change", () => loadChain($("#chain-date").value, $("#chain-contract").value));
+chart.subscribeClick((param) => {
+  if (state.isOptions && param.time) {
+    const t = typeof param.time === "string" ? param.time
+      : `${param.time.year}-${String(param.time.month).padStart(2, "0")}-${String(param.time.day).padStart(2, "0")}`;
+    if (!$("#tab-options").hidden) loadChain(t);
+  }
+});
 for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => switchTab(b.dataset.tab));
 
 // ---------- start ----------
@@ -610,6 +752,15 @@ for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("c
     if (location.hash === "#run") {
       switchTab("strategy");
       await runBacktest();
+    }
+    // #options: open the options dataset and run its default backtest
+    if (location.hash === "#options" && state.datasets.some((d) => d.kind === "options")) {
+      $("#dataset").value = state.datasets.find((d) => d.kind === "options").id;
+      await loadBars();
+      const a = state.alphas.find((x) => x.name === "trend_20_60");
+      if (a) selectAlpha(a.name);
+      switchTab("options");
+      await runOptions();
     }
   } catch (e) {
     msg("#formula-msg", `資料載入失敗：${e.message}`, "error");
