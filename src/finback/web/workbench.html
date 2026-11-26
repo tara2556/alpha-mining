@@ -8,17 +8,21 @@
 </head>
 <body>
   <header class="bar">
-    <strong class="logo">finback</strong>
-    <label class="field inline">
-      <span>資料</span>
-      <select id="dataset" aria-label="資料集"></select>
-    </label>
-    <button type="button" id="open-download" class="ghost">＋ 下載</button>
-    <label class="field inline"><span>起</span><input type="date" id="start"></label>
-    <label class="field inline"><span>迄</span><input type="date" id="end"></label>
-    <label class="field inline" title="此日（含）之後為樣本外，用來檢驗沒有被調參看過的期間">
-      <span>樣本外起點</span><input type="date" id="split">
-    </label>
+    <a class="brand" href="/"><strong class="logo">finback</strong><span class="brand-sub">工作台</span></a>
+    <div class="bar-group">
+      <label class="field inline"><span>資料</span><select id="dataset" aria-label="資料集"></select></label>
+      <button type="button" id="open-download" class="ghost small">＋ 下載</button>
+    </div>
+    <div class="bar-group">
+      <label class="field inline"><span>期間</span><input type="date" id="start" aria-label="起始日"></label>
+      <span class="range-sep" aria-hidden="true">–</span>
+      <input type="date" id="end" aria-label="結束日">
+    </div>
+    <div class="bar-group">
+      <label class="field inline" title="此日（含）之後為樣本外，用來檢驗沒有被調參看過的期間">
+        <span>樣本外起點</span><input type="date" id="split">
+      </label>
+    </div>
     <span class="spacer"></span>
     <a href="/reports" class="link">已存報告 →</a>
   </header>
@@ -33,7 +37,7 @@
     <label class="field inline"><span>迄</span><input type="date" id="dl-end" required></label>
     <button type="submit">下載</button>
     <button type="button" class="ghost" id="dl-cancel">取消</button>
-    <span id="dl-status" class="muted" role="status"></span>
+    <span id="dl-status" class="note" role="status"></span>
   </form>
 
   <div class="layout">
@@ -46,30 +50,31 @@
         </div>
       </div>
       <ul id="pool-list"></ul>
-      <p class="muted tiny">IC = alpha 與「隔日開盤起 5 日報酬」的相關係數；樣本內／樣本外分開計算。</p>
+      <p class="note">IC = alpha 與「隔日開盤起 5 日報酬」的相關係數；樣本內／樣本外分開計算。</p>
     </aside>
 
     <section class="chart-area">
       <div class="legend" id="legend" aria-live="off"></div>
       <div id="chart" class="chart"></div>
-      <p class="muted tiny chart-note">價格為分割調整後（僅顯示用）；訊號以不含未來資訊的方式另行計算。
-        窗格：價格與成交量／alpha／淨值指數（策略 vs 買入持有）。</p>
+      <div class="pane-label" id="pane-label-1" hidden>alpha</div>
+      <div class="pane-label" id="pane-label-2" hidden>淨值指數　<i class="key k-strat"></i>策略　<i class="key k-bench"></i>買入持有</div>
+      <p class="tiny muted chart-note">價格為分割調整後（僅顯示用）；訊號以不含未來資訊的方式另行計算。</p>
     </section>
 
     <aside class="panel">
       <div class="tabs" role="tablist">
-        <button type="button" role="tab" data-tab="formula" aria-selected="true">公式</button>
-        <button type="button" role="tab" data-tab="strategy" aria-selected="false">策略回測</button>
-        <button type="button" role="tab" data-tab="options" aria-selected="false" hidden>選擇權</button>
+        <button type="button" role="tab" data-tab="formula" aria-selected="true" aria-controls="tab-formula">公式</button>
+        <button type="button" role="tab" data-tab="strategy" aria-selected="false" aria-controls="tab-strategy">策略回測</button>
+        <button type="button" role="tab" data-tab="options" aria-selected="false" aria-controls="tab-options" hidden>選擇權</button>
       </div>
 
-      <section class="tab" id="tab-formula">
+      <section class="tab" id="tab-formula" role="tabpanel">
         <label class="field"><span>名稱</span><input id="alpha-name" placeholder="例如 mom20" autocomplete="off"></label>
-        <label class="field"><span>公式 <span class="muted tiny">Ctrl+Enter 評估</span></span>
+        <label class="field"><span>公式<span class="hint-key"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 評估</span></span>
           <textarea id="alpha-expr" rows="4" spellcheck="false" placeholder="ts_mean(close, 20) / ts_mean(close, 60) - 1"></textarea>
         </label>
         <label class="field"><span>說明</span><input id="alpha-desc" autocomplete="off"></label>
-        <div class="row">
+        <div class="actions static">
           <button type="button" id="evaluate">評估</button>
           <button type="button" class="ghost" id="save-alpha">存入池</button>
           <button type="button" class="ghost danger" id="delete-alpha">刪除</button>
@@ -78,44 +83,51 @@
         <div id="eval-result" hidden>
           <h3>預測力</h3>
           <div class="table-wrap"><table class="stats" id="ic-table"></table></div>
-          <h3>分組報酬 <span class="muted tiny" id="q-title"></span></h3>
+          <h3>分組報酬</h3>
+          <p class="note" id="q-title"></p>
           <div id="quantile-chart" class="qchart"></div>
-          <p class="muted tiny" id="eval-note"></p>
+          <p class="note" id="eval-note"></p>
         </div>
-        <details class="ref">
+        <details class="ref section">
           <summary>函數與變數</summary>
           <dl id="ref-list"></dl>
         </details>
       </section>
 
-      <section class="tab" id="tab-strategy" hidden>
-        <label class="field"><span>策略類型</span>
-          <select id="st-type">
-            <option value="alpha">alpha 門檻（使用公式頁的公式）</option>
-            <option value="sma_cross">均線交叉</option>
-            <option value="momentum">動能</option>
-            <option value="fixed_weight">固定比例再平衡</option>
-            <option value="buy_and_hold">買入持有</option>
-          </select>
-        </label>
-        <div id="st-params" class="grid2"></div>
-        <details>
-          <summary>資金與成本</summary>
-          <div class="grid2">
-            <label class="field"><span>本金</span><input type="number" id="cash" value="1000000" min="1" step="1000"></label>
-            <label class="field"><span>交易單位（股）</span><input type="number" id="lot" value="1" min="1" step="1"></label>
-            <label class="field"><span>手續費率</span><input type="number" id="c-rate" value="0.001425" step="0.000025" min="0"></label>
-            <label class="field"><span>手續費折扣</span><input type="number" id="c-disc" value="1" step="0.05" min="0" max="1"></label>
-            <label class="field"><span>最低手續費</span><input type="number" id="c-min" value="20" step="1" min="0"></label>
-            <label class="field"><span>賣出交易稅</span><input type="number" id="c-tax" value="0.001" step="0.0005" min="0"></label>
-          </div>
-          <p class="muted tiny">ETF 交易稅 0.1%，一般股票 0.3%。皆為輸入假設，非券商報價。</p>
-        </details>
-        <div class="row">
+      <section class="tab" id="tab-strategy" role="tabpanel" hidden>
+        <div class="actions">
           <button type="button" id="run">執行回測</button>
-          <input id="save-name" placeholder="報告名稱（選填）" size="14" aria-label="報告名稱">
-          <button type="button" class="ghost" id="save-report">另存報告</button>
+          <div class="save-group"><input id="save-name" placeholder="報告名稱（另存時必填）" aria-label="報告名稱"><button type="button" class="ghost" id="save-report">另存報告</button></div>
         </div>
+        <details class="section" open>
+          <summary>策略</summary>
+          <div class="section-body">
+            <label class="field"><span>策略類型</span>
+              <select id="st-type">
+                <option value="alpha">alpha 門檻（使用公式頁的公式）</option>
+                <option value="sma_cross">均線交叉</option>
+                <option value="momentum">動能</option>
+                <option value="fixed_weight">固定比例再平衡</option>
+                <option value="buy_and_hold">買入持有</option>
+              </select>
+            </label>
+            <div id="st-params" class="grid2"></div>
+          </div>
+        </details>
+        <details class="section">
+          <summary>資金與成本</summary>
+          <div class="section-body">
+            <div class="grid2">
+              <label class="field"><span>本金</span><input type="number" id="cash" value="1000000" min="1" step="1000"></label>
+              <label class="field"><span>交易單位（股）</span><input type="number" id="lot" value="1" min="1" step="1"></label>
+              <label class="field"><span>手續費率</span><input type="number" id="c-rate" value="0.001425" step="0.000025" min="0"></label>
+              <label class="field"><span>手續費折扣</span><input type="number" id="c-disc" value="1" step="0.05" min="0" max="1"></label>
+              <label class="field"><span>最低手續費</span><input type="number" id="c-min" value="20" step="1" min="0"></label>
+              <label class="field"><span>賣出交易稅</span><input type="number" id="c-tax" value="0.001" step="0.0005" min="0"></label>
+            </div>
+            <p class="note">ETF 交易稅 0.1%，一般股票 0.3%。皆為輸入假設，非券商報價。</p>
+          </div>
+        </details>
         <p id="strategy-msg" class="msg" role="status"></p>
         <div id="bt-result" hidden>
           <div class="table-wrap"><table class="stats" id="bt-table"></table></div>
@@ -124,43 +136,57 @@
         </div>
       </section>
 
-      <section class="tab" id="tab-options" hidden>
-        <p class="muted tiny">用「公式」頁目前的 alpha（以加權指數計算）決定方向：偏多買買權、偏空買賣權，其餘空手。
-          收盤後產生訊號並以當日資訊選約，隔日以該契約開盤價成交；沒有成交量就不成交。</p>
-        <div class="grid2" id="op-params">
-          <label class="field"><span>偏多進場（alpha &gt;）</span><input type="number" data-op="long_entry" value="0.01" step="0.005"></label>
-          <label class="field"><span>偏多出場（alpha &lt;）</span><input type="number" data-op="long_exit" value="0" step="0.005"></label>
-          <label class="field"><span>偏空進場（alpha &lt;）</span><input type="number" data-op="short_entry" value="-0.01" step="0.005"></label>
-          <label class="field"><span>偏空出場（alpha &gt;）</span><input type="number" data-op="short_exit" value="0" step="0.005"></label>
-          <label class="field"><span>契約</span><select data-op="series"><option value="monthly">只用月選</option><option value="all">含週選</option></select></label>
-          <label class="field"><span>價外檔數（0 = 價平）</span><input type="number" data-op="moneyness_steps" value="0" step="1"></label>
-          <label class="field"><span>最短到期天數</span><input type="number" data-op="min_days_to_expiry" value="10" step="1" min="0"></label>
-          <label class="field"><span>到期前換月天數</span><input type="number" data-op="roll_days" value="2" step="1" min="0"></label>
-          <label class="field"><span>每次權利金占淨值</span><input type="number" data-op="premium_fraction" value="0.05" step="0.01" min="0.01" max="1"></label>
-          <label class="field"><span>本金</span><input type="number" data-op="initial_cash" value="1000000" step="10000" min="1"></label>
-          <label class="field"><span>每口手續費（單邊）</span><input type="number" data-op="commission" value="25" step="1" min="0"></label>
-          <label class="field"><span>交易稅率</span><input type="number" data-op="tax_rate" value="0.001" step="0.0005" min="0"></label>
-        </div>
-        <label class="toggle"><input type="checkbox" data-op="allow_puts" checked> 偏空時買賣權</label>
-        <div class="row">
+      <section class="tab" id="tab-options" role="tabpanel" hidden>
+        <div class="actions">
           <button type="button" id="op-run">執行選擇權回測</button>
-          <input id="op-save-name" placeholder="報告名稱（選填）" size="14" aria-label="選擇權報告名稱">
-          <button type="button" class="ghost" id="op-save">另存報告</button>
+          <div class="save-group"><input id="op-save-name" placeholder="報告名稱（另存時必填）" aria-label="選擇權報告名稱"><button type="button" class="ghost" id="op-save">另存報告</button></div>
         </div>
+        <p class="note">用「公式」頁目前的 alpha（以加權指數計算）決定方向：偏多買買權、偏空買賣權，其餘空手。
+          收盤後產生訊號並以當日資訊選約，隔日以該契約開盤價成交；沒有成交量就不成交。</p>
+        <details class="section" open>
+          <summary>進場規則</summary>
+          <div class="section-body">
+            <div class="grid2" id="op-params">
+              <label class="field"><span>偏多進場（alpha &gt;）</span><input type="number" data-op="long_entry" value="0.01" step="0.005"></label>
+              <label class="field"><span>偏多出場（alpha &lt;）</span><input type="number" data-op="long_exit" value="0" step="0.005"></label>
+              <label class="field"><span>偏空進場（alpha &lt;）</span><input type="number" data-op="short_entry" value="-0.01" step="0.005"></label>
+              <label class="field"><span>偏空出場（alpha &gt;）</span><input type="number" data-op="short_exit" value="0" step="0.005"></label>
+            </div>
+            <label class="toggle"><input type="checkbox" data-op="allow_puts" checked> 偏空時買賣權</label>
+          </div>
+        </details>
+        <details class="section" open>
+          <summary>契約選擇</summary>
+          <div class="section-body grid2">
+            <label class="field"><span>契約</span><select data-op="series"><option value="monthly">只用月選</option><option value="all">含週選</option></select></label>
+            <label class="field"><span>價外檔數（0 = 價平）</span><input type="number" data-op="moneyness_steps" value="0" step="1"></label>
+            <label class="field"><span>最短到期天數</span><input type="number" data-op="min_days_to_expiry" value="10" step="1" min="0"></label>
+            <label class="field"><span>到期前換月天數</span><input type="number" data-op="roll_days" value="2" step="1" min="0"></label>
+          </div>
+        </details>
+        <details class="section">
+          <summary>資金與成本</summary>
+          <div class="section-body grid2">
+            <label class="field"><span>每次權利金占淨值</span><input type="number" data-op="premium_fraction" value="0.05" step="0.01" min="0.01" max="1"></label>
+            <label class="field"><span>本金</span><input type="number" data-op="initial_cash" value="1000000" step="10000" min="1"></label>
+            <label class="field"><span>每口手續費（單邊）</span><input type="number" data-op="commission" value="25" step="1" min="0"></label>
+            <label class="field"><span>交易稅率</span><input type="number" data-op="tax_rate" value="0.001" step="0.0005" min="0"></label>
+          </div>
+        </details>
         <p id="options-msg" class="msg" role="status"></p>
         <div id="op-result" hidden>
           <div class="table-wrap"><table class="stats" id="op-table"></table></div>
-          <p class="muted tiny" id="op-summary"></p>
+          <p class="note" id="op-summary"></p>
           <h3>交易紀錄 <span class="muted tiny" id="op-trade-count"></span></h3>
           <div class="table-wrap trades"><table class="stats" id="op-trades"></table></div>
         </div>
         <h3>契約鏈 <span class="muted tiny">點圖上任一天可切換日期</span></h3>
-        <div class="row">
+        <div class="actions static">
           <input type="date" id="chain-date" aria-label="契約鏈日期">
           <select id="chain-contract" aria-label="契約月份"></select>
         </div>
-        <p class="muted tiny" id="chain-info"></p>
-        <div class="table-wrap trades"><table class="stats chain" id="chain-table"></table></div>
+        <p class="note" id="chain-info"></p>
+        <div class="table-wrap trades chain-wrap"><table class="stats chain" id="chain-table"></table></div>
       </section>
     </aside>
   </div>

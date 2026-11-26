@@ -8,17 +8,15 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <h1>finback 回測報告</h1>
-      <p class="sub">資料由本機 <code>reports/</code> 讀取；所有指標由帳本重新計算</p>
-    </div>
-    <label class="picker">
-      <span>報告</span>
-      <select id="report-select" aria-label="選擇報告"></select>
-    </label>
+    <a class="brand" href="/"><strong class="logo">finback</strong><span class="brand-sub">回測報告</span></a>
+    <p class="sub">資料由本機 <code>reports/</code> 讀取；所有指標由帳本重新計算</p>
+    <span class="spacer"></span>
+    <label class="picker"><span>報告</span><select id="report-select" aria-label="選擇報告"></select></label>
+    <a href="/" class="link">← 工作台</a>
   </header>
 
   <main id="main">
+    <h1 class="sr-only">finback 回測報告</h1>
     <p id="status" class="status" role="status">載入中…</p>
 
     <section id="content" hidden>

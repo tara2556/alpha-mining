@@ -15,6 +15,18 @@ const signedPct = (v, d = 2) => (v === null || v === undefined ? "—" : (v > 0 
 const fix = (v, d = 3) => (v === null || v === undefined ? "—" : Number(v).toFixed(d));
 const money = (v) => Number(v).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmtPx = (v, d) => Number(v).toLocaleString("zh-TW", { minimumFractionDigits: d, maximumFractionDigits: d });
+const signedFix = (v, d) => (v === null || v === undefined ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(d));
+const isDark = () => getComputedStyle(document.documentElement).colorScheme === "dark";
+
+// A clickable table row that is also reachable and operable from the keyboard.
+function clickableRow(tr, handler) {
+  tr.classList.add("clickable");
+  tr.tabIndex = 0;
+  tr.addEventListener("click", handler);
+  tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); } });
+  return tr;
+}
 
 function el(tag, attrs = {}, text) {
   const n = document.createElement(tag);
@@ -40,7 +52,8 @@ function msg(target, text, kind = "") {
 
 async function busy(button, fn) {
   button.disabled = true;
-  try { return await fn(); } finally { button.disabled = false; }
+  button.setAttribute("aria-busy", "true");
+  try { return await fn(); } finally { button.disabled = false; button.removeAttribute("aria-busy"); }
 }
 
 // ---------- chart ----------
@@ -55,31 +68,60 @@ const volume = chart.addSeries(LW.HistogramSeries, {
   priceFormat: { type: "volume" }, priceScaleId: "vol", lastValueVisible: false, priceLineVisible: false,
 }, 0);
 volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-candle.priceScale().applyOptions({ scaleMargins: { top: 0.08, bottom: 0.22 } });
-const alphaLine = chart.addSeries(LW.LineSeries, { lineWidth: 2, title: "alpha", priceLineVisible: false }, 1);
-const stratLine = chart.addSeries(LW.LineSeries, { lineWidth: 2, title: "策略", priceLineVisible: false }, 2);
+candle.priceScale().applyOptions({ scaleMargins: { top: 0.12, bottom: 0.22 } });
+const alphaLine = chart.addSeries(LW.LineSeries, {
+  lineWidth: 2, title: "alpha", priceLineVisible: false, priceFormat: { type: "price", precision: 3, minMove: 0.001 },
+}, 1);
+const stratLine = chart.addSeries(LW.LineSeries, {
+  lineWidth: 2, title: "策略", priceLineVisible: false, priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+}, 2);
 const benchLine = chart.addSeries(LW.LineSeries, {
   lineWidth: 1, lineStyle: LW.LineStyle.Dashed, title: "買入持有", priceLineVisible: false,
+  priceFormat: { type: "price", precision: 2, minMove: 0.01 },
 }, 2);
 const markers = LW.createSeriesMarkers(candle, []);
 let thresholdLines = [];
 
+// Empty panes collapse to a sliver; each visible lower pane gets a title at its top-left.
 function layoutPanes() {
   const panes = chart.panes();
-  if (panes[0]) panes[0].setStretchFactor(3);
-  if (panes[1]) panes[1].setStretchFactor(1);
-  if (panes[2]) panes[2].setStretchFactor(1.2);
+  const hasAlpha = alphaLine.data().length > 0, hasEq = stratLine.data().length > 0;
+  panes[0]?.setStretchFactor(3);
+  panes[1]?.setStretchFactor(hasAlpha ? 1 : 0.001);
+  panes[2]?.setStretchFactor(hasEq ? 1.2 : 0.001);
+  // Pane heights update on the chart's next render, so measure after it (twice to be safe).
+  requestAnimationFrame(() => requestAnimationFrame(positionPaneLabels));
+  setTimeout(positionPaneLabels, 120);
 }
+
+function positionPaneLabels() {
+  const heights = chart.panes().map((p) => p.getHeight());
+  const offset = $("#chart").offsetTop;
+  const has = [true, alphaLine.data().length > 0, stratLine.data().length > 0];
+  let top = offset;
+  heights.forEach((h, i) => {
+    const label = $(`#pane-label-${i}`);
+    if (label) {
+      label.hidden = h < 40 || !has[i];
+      label.style.top = `${top + 6}px`;
+    }
+    top += h + 1;
+  });
+}
+new ResizeObserver(() => requestAnimationFrame(positionPaneLabels)).observe($("#chart"));
+$("#chart").addEventListener("pointerup", () => requestAnimationFrame(positionPaneLabels));
 
 function applyTheme() {
   const up = css("--up"), down = css("--down");
+  const crossLine = { color: css("--crosshair"), labelBackgroundColor: css("--crosshair-label"), style: LW.LineStyle.Dashed };
   chart.applyOptions({
     layout: {
-      background: { type: "solid", color: css("--bg") }, textColor: css("--muted"),
+      background: { type: "solid", color: css("--bg") }, textColor: css("--muted"), fontSize: 11,
       fontFamily: getComputedStyle(document.body).fontFamily,
-      panes: { separatorColor: css("--border"), enableResize: true },
+      panes: { separatorColor: css("--border"), separatorHoverColor: css("--panel-2"), enableResize: true },
     },
-    grid: { vertLines: { color: css("--grid") }, horzLines: { color: css("--grid") } },
+    crosshair: { mode: LW.CrosshairMode.Normal, vertLine: crossLine, horzLine: crossLine },
+    grid: { vertLines: { visible: false }, horzLines: { color: css("--grid") } },
     rightPriceScale: { borderColor: css("--border") },
     timeScale: { borderColor: css("--border") },
   });
@@ -91,6 +133,7 @@ function applyTheme() {
   renderMarkers();
 }
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
 function hexAlpha(color, alpha) {
   const m = /^#([0-9a-f]{6})$/i.exec(color);
@@ -100,21 +143,23 @@ function hexAlpha(color, alpha) {
 }
 
 function renderVolume() {
-  const up = hexAlpha(css("--up"), 0.35), down = hexAlpha(css("--down"), 0.35);
+  const a = isDark() ? 0.45 : 0.35;
+  const up = hexAlpha(css("--up"), a), down = hexAlpha(css("--down"), a);
   volume.setData(state.bars.map((b) => ({ time: b.time, value: b.volume, color: b.close >= b.open ? up : down })));
 }
 
 function renderMarkers() {
   const list = [];
   const ev = state.events;
+  const quiet = (state.tradeMarkers || []).length > 0; // trades shown: events keep only their dot
   if (ev) {
-    for (const d of ev.dividends) list.push({ time: d.ex_date, position: "aboveBar", shape: "circle", color: css("--bench"), text: `息 ${d.cash_per_share}` });
-    for (const s of ev.splits) list.push({ time: s.date, position: "aboveBar", shape: "square", color: css("--bench"), text: `分割 1→${s.ratio}` });
+    for (const d of ev.dividends) list.push({ time: d.ex_date, position: "aboveBar", shape: "circle", color: css("--bench"), size: 0.6, text: quiet ? "" : `息 ${d.cash_per_share}` });
+    for (const s of ev.splits) list.push({ time: s.date, position: "aboveBar", shape: "square", color: css("--bench"), size: 0.6, text: quiet ? "" : `分割 1→${s.ratio}` });
   }
   const split = $("#split").value;
   if (split) {
     const first = state.bars.find((b) => b.time >= split);
-    if (first) list.push({ time: first.time, position: "aboveBar", shape: "arrowDown", color: css("--accent"), text: "樣本外 →" });
+    if (first) list.push({ time: first.time, position: "belowBar", shape: "arrowUp", color: css("--link"), text: "樣本外", size: 1 });
   }
   list.push(...(state.tradeMarkers || []));
   list.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
@@ -138,7 +183,9 @@ function updateLegend(param) {
   const cls = bar.close >= prev ? "up" : "down";
   const parts = [el("span", { class: "sym" }, `${state.symbol} 日`)];
   for (const [k, v] of [["開", bar.open], ["高", bar.high], ["低", bar.low], ["收", bar.close]]) {
-    parts.push(el("span", {}, `${k} `), el("span", { class: cls }, v.toFixed(2)));
+    const item = el("span");
+    item.append(el("span", { class: "k" }, k), el("span", { class: cls }, fmtPx(v, 2)));
+    parts.push(item);
   }
   parts.push(el("span", { class: cls }, signedPct(bar.close / prev - 1)));
   const a = param?.seriesData?.get(alphaLine) ?? state.alphaByTime?.get(bar.time);
@@ -165,15 +212,27 @@ async function loadDatasets(selectId) {
 }
 
 async function loadBars() {
+  $(".chart-area").setAttribute("aria-busy", "true");
+  try {
+    await loadBarsInner();
+  } finally {
+    $(".chart-area").removeAttribute("aria-busy");
+  }
+}
+
+async function loadBarsInner() {
   const id = $("#dataset").value;
   const d = state.datasets.find((x) => x.id === id);
   state.isOptions = d?.kind === "options";
+  candle.applyOptions({ priceFormat: state.isOptions
+    ? { type: "custom", minMove: 1, formatter: (p) => fmtPx(p, 0) }
+    : { type: "price", precision: 2, minMove: 0.01 } });
   document.querySelector('[data-tab="options"]').hidden = !state.isOptions;
   document.querySelector('[data-tab="strategy"]').hidden = state.isOptions;
   if (state.isOptions && !$("#tab-strategy").hidden) switchTab("options");
   if (!state.isOptions && !$("#tab-options").hidden) switchTab("strategy");
+  state.dataset = id; // set before awaiting so in-flight results for the old dataset are dropped
   const data = await api(`/api/bars?dataset=${encodeURIComponent(id)}`);
-  state.dataset = id;
   state.symbol = data.symbol;
   state.bars = data.bars;
   state.events = data.events;
@@ -193,6 +252,7 @@ async function loadBars() {
   updateLegend();
   state.ics = {};
   renderPool();
+  layoutPanes();
   if (state.current) evaluate();
 }
 
@@ -206,6 +266,7 @@ function clearResults() {
   setThresholds([]);
   $("#bt-result").hidden = true;
   renderMarkers();
+  layoutPanes();
 }
 
 $("#dataset").addEventListener("change", () => loadBars().catch((e) => msg("#formula-msg", e.message, "error")));
@@ -263,7 +324,7 @@ function renderPool() {
     const head = el("div", { class: "name" });
     head.append(el("span", {}, a.name));
     const ic = state.ics[a.name];
-    if (ic) head.append(el("span", { class: "ic", title: "5 日 IC：樣本內 / 樣本外" }, `${fix(ic.is, 2)} / ${fix(ic.oos, 2)}`));
+    if (ic) head.append(el("span", { class: "ic", title: "5 日 IC：樣本內 / 樣本外" }, `${signedFix(ic.is, 2)} / ${signedFix(ic.oos, 2)}`));
     li.append(head);
     if (a.description) li.append(el("div", { class: "desc" }, a.description));
     li.append(el("code", {}, a.expr));
@@ -315,7 +376,9 @@ async function evaluate() {
   if (!expr || !state.dataset) return;
   await busy($("#evaluate"), async () => {
     try {
+      const requested = state.dataset;
       const out = await api("/api/alpha/evaluate", { ...range(), expr, horizons: [1, 5, 20] });
+      if (state.dataset !== requested) return; // dataset switched while waiting: stale result
       state.evalResult = out;
       state.alphaByTime = new Map(out.series.filter((p) => p.value !== undefined).map((p) => [p.time, p]));
       alphaLine.setData(out.series);
@@ -335,25 +398,29 @@ function renderEval(stats) {
   $("#eval-result").hidden = false;
   const table = $("#ic-table");
   const is = seg(stats, "in_sample"), oos = seg(stats, "out_of_sample");
-  const head = el("tr");
-  head.append(el("th", {}, "預測期"));
-  for (const label of ["IC", "Rank IC", "勝率", "樣本數"]) {
-    head.append(el("th", {}, `${label} 內`), ...(oos ? [el("th", {}, `${label} 外`)] : []));
-  }
-  const rows = [head];
+  const focus = (h) => (h === 5 ? " focus" : "");
+  const head1 = el("tr"), head2 = el("tr", { class: "sub" });
+  head1.append(el("th", {}, ""));
+  head2.append(el("th", {}, "指標"));
   for (const h of stats.horizons) {
-    const a = is?.horizons?.[String(h)] || {}, b = oos?.horizons?.[String(h)] || {};
+    head1.append(el("th", { class: `grp gs${focus(h)}`, colspan: oos ? 2 : 1 }, `${h} 日`));
+    head2.append(el("th", { class: `gs${focus(h)}` }, oos ? "內" : "全期"));
+    if (oos) head2.append(el("th", { class: focus(h).trim() }, "外"));
+  }
+  const rows = [head1, head2];
+  for (const [label, key, f] of [["IC", "ic", (v) => fix(v, 3)], ["Rank IC", "rank_ic", (v) => fix(v, 3)],
+    ["勝率", "hit_rate", (v) => pct(v, 1)], ["樣本數", "n", (v) => v ?? "—"]]) {
     const tr = el("tr");
-    tr.append(el("td", {}, `${h} 日`));
-    for (const [key, f] of [["ic", (v) => fix(v, 3)], ["rank_ic", (v) => fix(v, 3)], ["hit_rate", (v) => pct(v, 1)], ["n", (v) => v ?? "—"]]) {
-      tr.append(el("td", {}, f(a[key])));
-      if (oos) tr.append(el("td", {}, f(b[key])));
+    tr.append(el("td", {}, label));
+    for (const h of stats.horizons) {
+      tr.append(el("td", { class: `gs${focus(h)}` }, f(is?.horizons?.[String(h)]?.[key])));
+      if (oos) tr.append(el("td", { class: focus(h).trim() }, f(oos?.horizons?.[String(h)]?.[key])));
     }
     rows.push(tr);
   }
   table.replaceChildren(...rows);
   const h = stats.horizons.includes(5) ? 5 : stats.horizons[0];
-  $("#q-title").textContent = `（alpha 由低到高分 ${stats.quantiles} 組，隔日開盤起 ${h} 日平均報酬；分組界線只用樣本內資料）`;
+  $("#q-title").textContent = `alpha 由低到高分 ${stats.quantiles} 組，隔日開盤起 ${h} 日平均報酬；分組界線只用樣本內資料。`;
   const q = (s) => s?.horizons?.[String(h)]?.quantile_returns?.map((x) => x.mean_fwd);
   quantileChart($("#quantile-chart"), q(is), q(oos));
   $("#eval-note").textContent = stats.note || "";
@@ -371,13 +438,17 @@ function quantileChart(container, a, b) {
   const groups = [a, b].filter(Boolean);
   const vals = groups.flat().filter((v) => v !== null);
   if (!vals.length) return;
-  const W = container.clientWidth || 340, H = 150, m = { l: 44, r: 6, t: 8, b: 18 };
+  const W = container.clientWidth || 340, H = 160, m = { l: 48, r: 8, t: 10, b: 22 };
   const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
   const y = (v) => m.t + (1 - (v - lo) / (hi - lo || 1)) * (H - m.t - m.b);
   const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "各分組平均報酬長條圖" });
-  const n = a.length, slot = (W - m.l - m.r) / n, bw = Math.max(4, (slot - 6) / groups.length - 2);
+  const n = a.length, slot = (W - m.l - m.r) / n;
+  const bw = Math.min(28, Math.max(4, (slot - 6) / groups.length - 2));
   const colors = [css("--series-1"), css("--series-2")];
-  for (const v of [lo, 0, hi]) {
+  const ticks = [...new Set([lo, lo / 2, 0, hi / 2, hi].filter((v) => v !== 0 || true))]
+    .filter((v, i, arr) => arr.findIndex((u) => Math.abs(u - v) < 1e-12) === i);
+  for (const v of ticks) {
+    svg.append(mk("line", { class: "grid", x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }));
     const t = mk("text", { x: m.l - 4, y: y(v) + 3, "text-anchor": "end" });
     t.textContent = pct(v, 2);
     svg.append(t);
@@ -387,9 +458,10 @@ function quantileChart(container, a, b) {
     groups.forEach((g, k) => {
       const v = g[i];
       if (v === null || v === undefined) return;
-      const x = m.l + i * slot + 3 + k * (bw + 2);
+      const groupW = groups.length * bw + (groups.length - 1) * 2;
+      const x = m.l + i * slot + (slot - groupW) / 2 + k * (bw + 2);
       const top = Math.min(y(v), y(0)), h = Math.max(1, Math.abs(y(v) - y(0)));
-      const rect = mk("rect", { x, y: top, width: bw, height: h, rx: 2, fill: colors[k] });
+      const rect = mk("rect", { x, y: top, width: bw, height: h, rx: 1, fill: colors[k] });
       const tip = mk("title", {});
       tip.textContent = `第 ${i + 1} 組（${k ? "樣本外" : "樣本內"}）：${signedPct(v, 3)}`;
       rect.append(tip);
@@ -408,7 +480,7 @@ function quantileChart(container, a, b) {
     s.append(i, document.createTextNode(label));
     key.append(s);
   });
-  container.append(key);
+  container.prepend(key);
 }
 
 $("#save-alpha").addEventListener("click", () => busy($("#save-alpha"), async () => {
@@ -515,13 +587,18 @@ function backtestBody(saveAs) {
 
 async function runBacktest(saveAs) {
   try {
+    const requested = state.dataset;
     const out = await api("/api/backtest", backtestBody(saveAs));
+    if (state.dataset !== requested) return;
     state.backtest = out;
     const many = out.strategy.trades.length > 40; // many trades: arrows only, details in the table
     state.tradeMarkers = out.strategy.trades.map((t) => {
       const buy = t.side === "buy";
-      return { time: t.date, position: buy ? "belowBar" : "aboveBar", shape: buy ? "arrowUp" : "arrowDown",
-        color: buy ? css("--series-1") : css("--series-2"), text: many ? "" : (buy ? "買" : "賣") };
+      const color = buy ? css("--series-1") : css("--series-2");
+      return many
+        ? { time: t.date, position: buy ? "belowBar" : "aboveBar", shape: "circle", size: 0.5, color, text: "" }
+        : { time: t.date, position: buy ? "belowBar" : "aboveBar", shape: buy ? "arrowUp" : "arrowDown", size: 0.8,
+          color, text: buy ? "買" : "賣" };
     });
     stratLine.setData(out.strategy.wealth);
     benchLine.setData(out.benchmark.wealth);
@@ -552,12 +629,12 @@ function renderBacktest(out) {
   $("#bt-result").hidden = false;
   const segs = out.split_date ? [["in_sample", "內"], ["out_of_sample", "外"]] : [["full", "全期"]];
   const table = $("#bt-table");
-  const head1 = el("tr"), head2 = el("tr");
+  const head1 = el("tr"), head2 = el("tr", { class: "sub" });
   head1.append(el("th", {}, ""));
   head2.append(el("th", {}, "指標"));
   for (const label of ["策略", "買入持有"]) {
-    head1.append(el("th", { class: "grp", colspan: segs.length }, label));
-    for (const [, s] of segs) head2.append(el("th", {}, segs.length > 1 ? `樣本${s}` : s));
+    head1.append(el("th", { class: "grp gs", colspan: segs.length }, label));
+    segs.forEach(([, s], i) => head2.append(el("th", i === 0 ? { class: "gs" } : {}, segs.length > 1 ? `樣本${s}` : s)));
   }
   const rows = [
     ["總報酬", "total_return", (v) => signedPct(v)],
@@ -572,7 +649,7 @@ function renderBacktest(out) {
     const tr = el("tr");
     tr.append(el("td", {}, label));
     for (const side of [out.strategy, out.benchmark]) {
-      for (const [k] of segs) tr.append(el("td", {}, f(side.metrics[k]?.[key])));
+      segs.forEach(([k], i) => tr.append(el("td", i === 0 ? { class: "gs" } : {}, f(side.metrics[k]?.[key]))));
     }
     return tr;
   });
@@ -584,12 +661,10 @@ function renderBacktest(out) {
   for (const h of ["日期", "買賣", "股數", "價格", "成本"]) head.append(el("th", {}, h));
   $("#trade-table").replaceChildren(head, ...trades.slice().reverse().map((t) => {
     const tr = el("tr");
-    tr.append(el("td", {}, t.date), el("td", {}, t.side === "buy" ? "買" : "賣"),
+    tr.append(el("td", {}, t.date), el("td", { class: "txt" }, t.side === "buy" ? "買" : "賣"),
       el("td", {}, Number(t.quantity).toLocaleString("zh-TW")), el("td", {}, Number(t.price).toFixed(2)),
       el("td", {}, money(Number(t.commission) + Number(t.tax))));
-    tr.style.cursor = "pointer";
-    tr.addEventListener("click", () => focusDate(t.date));
-    return tr;
+    return clickableRow(tr, () => focusDate(t.date));
   }));
 }
 
@@ -619,12 +694,12 @@ function optionParams() {
 
 function metricsTable(table, out, leftLabel, rightLabel) {
   const segs = out.split_date ? [["in_sample", "樣本內"], ["out_of_sample", "樣本外"]] : [["full", "全期"]];
-  const head1 = el("tr"), head2 = el("tr");
+  const head1 = el("tr"), head2 = el("tr", { class: "sub" });
   head1.append(el("th", {}, ""));
   head2.append(el("th", {}, "指標"));
   for (const label of [leftLabel, rightLabel]) {
-    head1.append(el("th", { class: "grp", colspan: segs.length }, label));
-    for (const [, s] of segs) head2.append(el("th", {}, s));
+    head1.append(el("th", { class: "grp gs", colspan: segs.length }, label));
+    segs.forEach(([, s], i) => head2.append(el("th", i === 0 ? { class: "gs" } : {}, s)));
   }
   const rows = [
     ["總報酬", "total_return", (v) => signedPct(v)], ["年化報酬", "cagr", (v) => signedPct(v)],
@@ -633,7 +708,9 @@ function metricsTable(table, out, leftLabel, rightLabel) {
   ].map(([label, key, f]) => {
     const tr = el("tr");
     tr.append(el("td", {}, label));
-    for (const side of [out.strategy, out.benchmark]) for (const [k] of segs) tr.append(el("td", {}, f(side.metrics[k]?.[key])));
+    for (const side of [out.strategy, out.benchmark]) {
+      segs.forEach(([k], i) => tr.append(el("td", i === 0 ? { class: "gs" } : {}, f(side.metrics[k]?.[key]))));
+    }
     return tr;
   });
   table.replaceChildren(head1, head2, ...rows);
@@ -649,6 +726,7 @@ async function runOptions(saveAs) {
       start: $("#start").value || null, end: $("#end").value || null, split_date: $("#split").value || null,
       expr, params: optionParams(), ...(saveAs ? { save_as: saveAs } : {}),
     });
+    if (!state.isOptions) return; // switched away from the options dataset while waiting
     state.backtest = out;
     stratLine.setData(out.strategy.wealth);
     benchLine.setData(out.benchmark.wealth);
@@ -659,10 +737,10 @@ async function runOptions(saveAs) {
     state.tradeMarkers = out.trades.filter((t) => t.action !== "missed").map((t) => {
       if (t.action === "open") {
         const call = t.call_put === "call";
-        return { time: t.date, position: call ? "belowBar" : "aboveBar", shape: call ? "arrowUp" : "arrowDown",
+        return { time: t.date, position: call ? "belowBar" : "aboveBar", shape: call ? "arrowUp" : "arrowDown", size: 0.8,
           color: call ? css("--series-1") : css("--series-2"), text: `${call ? "C" : "P"}${Number(t.strike)}` };
       }
-      return { time: t.date, position: "aboveBar", shape: "circle", color: css("--bench"), text: t.action === "expire" ? "結算" : "平" };
+      return { time: t.date, position: "aboveBar", shape: "circle", size: 0.5, color: css("--bench"), text: t.action === "expire" ? "結算" : "" };
     });
     layoutPanes();
     renderMarkers();
@@ -677,12 +755,10 @@ async function runOptions(saveAs) {
     for (const h of ["日期", "動作", "契約", "履約價", "口數", "價格", "說明"]) head.append(el("th", {}, h));
     $("#op-trades").replaceChildren(head, ...out.trades.slice().reverse().map((t) => {
       const tr = el("tr");
-      tr.append(el("td", {}, t.date), el("td", {}, ACTION[t.action] || t.action),
-        el("td", {}, `${t.contract} ${t.call_put === "call" ? "買權" : "賣權"}`), el("td", {}, Number(t.strike).toFixed(0)),
-        el("td", {}, String(t.contracts)), el("td", {}, Number(t.price).toFixed(1)), el("td", {}, t.reason));
-      tr.style.cursor = "pointer";
-      tr.addEventListener("click", () => { focusDate(t.date); loadChain(t.date, t.contract); });
-      return tr;
+      tr.append(el("td", {}, t.date), el("td", { class: "txt" }, ACTION[t.action] || t.action),
+        el("td", { class: "txt" }, `${t.contract} ${t.call_put === "call" ? "買權" : "賣權"}`), el("td", {}, Number(t.strike).toFixed(0)),
+        el("td", {}, String(t.contracts)), el("td", {}, Number(t.price).toFixed(1)), el("td", { class: "txt wrap" }, t.reason));
+      return clickableRow(tr, () => { focusDate(t.date); loadChain(t.date, t.contract); });
     }));
     msg("#options-msg", (s.reconciled ? "帳本每日核對一致" : "⚠ 帳本核對失敗，結果不可信") + (out.saved ? `；已存成報告「${out.saved}」` : ""),
       s.reconciled ? "ok" : "error");
@@ -706,21 +782,33 @@ async function loadChain(day, contract) {
     $("#chain-contract").replaceChildren(...out.contracts.map((c) =>
       el("option", { value: c.code }, `${c.code}（到期 ${c.expiry}）`)));
     $("#chain-contract").value = out.contract;
-    $("#chain-info").textContent = out.spot ? `加權指數收盤 ${out.spot.toLocaleString("zh-TW")}；價格為日盤收盤，量為日盤成交口數` : "";
-    const head = el("tr");
-    for (const [h, cls] of [["買權量", ""], ["買權收", ""], ["履約價", "mid"], ["賣權收", ""], ["賣權量", ""]]) head.append(el("th", { class: cls }, h));
+    $("#chain-info").className = "note";
+    $("#chain-info").textContent = out.spot ? `加權指數收盤 ${out.spot.toLocaleString("zh-TW")}；價格為日盤收盤，量為日盤成交口數；淺底為價內` : "";
+    const group = el("tr");
+    group.append(el("th", { class: "grp", colspan: 2 }, "買權 Call"), el("th", { class: "mid grp gs" }, ""),
+      el("th", { class: "grp gs", colspan: 2 }, "賣權 Put"));
+    const head = el("tr", { class: "sub" });
+    for (const [h, cls] of [["量", ""], ["收盤", ""], ["履約價", "mid gs"], ["收盤", "gs"], ["量", ""]]) head.append(el("th", { class: cls }, h));
     const atm = out.spot === null ? null
       : out.rows.reduce((best, r) => (best === null || Math.abs(r.strike - out.spot) < Math.abs(best - out.spot) ? r.strike : best), null);
     const cell = (x, k) => (x && x[k] ? (k === "volume" ? x[k].toLocaleString("zh-TW") : x[k].toFixed(1)) : "—");
-    $("#chain-table").replaceChildren(head, ...out.rows.map((r) => {
+    $("#chain-table").replaceChildren(group, head, ...out.rows.map((r) => {
       const tr = el("tr", r.strike === atm ? { class: "atm" } : {});
-      tr.append(el("td", {}, cell(r.call, "volume")), el("td", {}, cell(r.call, "close")), el("td", { class: "mid" }, r.strike.toFixed(0)),
-        el("td", {}, cell(r.put, "close")), el("td", {}, cell(r.put, "volume")));
+      const callItm = out.spot !== null && r.strike < out.spot ? "itm" : "";
+      const putItm = out.spot !== null && r.strike > out.spot ? "itm" : "";
+      tr.append(el("td", { class: callItm }, cell(r.call, "volume")), el("td", { class: callItm }, cell(r.call, "close")),
+        el("td", { class: "mid gs strike" }, r.strike.toFixed(0)),
+        el("td", { class: `gs ${putItm}`.trim() }, cell(r.put, "close")), el("td", { class: putItm }, cell(r.put, "volume")));
       return tr;
     }));
     const atmRow = $("#chain-table tr.atm");
-    if (atmRow) atmRow.scrollIntoView({ block: "center" });
+    if (atmRow) {
+      // scroll only the chain's own container, never the panel or the page
+      const wrap = atmRow.closest(".table-wrap");
+      wrap.scrollTop = atmRow.offsetTop - wrap.clientHeight / 2;
+    }
   } catch (e) {
+    $("#chain-info").className = "note msg error";
     $("#chain-info").textContent = e.message;
     $("#chain-table").replaceChildren();
   }

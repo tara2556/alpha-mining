@@ -296,7 +296,11 @@ function metaValue(key, value) {
 function renderMeta(report) {
   const dl = $("#run-meta");
   dl.replaceChildren();
-  const add = (k, v) => { dl.append(el("dt", {}, k), el("dd", {}, v)); };
+  // hashes and paths read better in a monospace face
+  const add = (k, v) => {
+    const mono = /SHA-256|輸入檔|設定檔$/.test(k);
+    dl.append(el("dt", {}, k), el("dd", mono ? { class: "mono" } : {}, v));
+  };
   const run = report.run;
   if (!run) {
     add("run.json", "此報告沒有執行參數檔");
