@@ -1,0 +1,10 @@
+{
+  "alphas": [
+    {"name": "mom20", "expr": "pct_change(close, 20)", "description": "20 日動能：近 20 日漲跌幅"},
+    {"name": "trend_20_60", "expr": "ts_mean(close, 20) / ts_mean(close, 60) - 1", "description": "均線乖離：20 日均線相對 60 日均線"},
+    {"name": "rev5", "expr": "-zscore(close, 5)", "description": "短期反轉：收盤價低於近 5 日平均時為正"},
+    {"name": "rsi_oversold", "expr": "(50 - rsi(close, 14)) / 50", "description": "RSI 超賣程度：RSI 越低越大"},
+    {"name": "low_vol", "expr": "ts_mean(ts_std(returns, 20), 120) - ts_std(returns, 20)", "description": "低波動環境：近期波動低於半年平均時為正"},
+    {"name": "trend_combo", "expr": "0.5 * zscore(trend_20_60, 120) + 0.5 * zscore(mom20, 120)", "description": "組合範例：均線乖離與動能各半（引用池內其他 alpha）"}
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "0050_trend_2020_2025",
+  "description": "0050 上的幾個預先定義的趨勢規則，與買入持有比較。參數沒有經過最佳化。",
+  "symbol": "0050",
+  "start": "2020-01-01",
+  "end": "2025-12-31",
+  "initial_cash": "1000000",
+  "lot_size": 1,
+  "costs": {
+    "commission_rate": "0.001425",
+    "commission_discount": "1",
+    "min_commission": "20",
+    "sell_tax_rate": "0.001"
+  },
+  "strategies": [
+    {"label": "bh", "name": "買入持有", "type": "buy_and_hold"},
+    {"label": "sma20_60", "name": "均線 20/60", "type": "sma_cross", "fast": 20, "slow": 60},
+    {"label": "mom120", "name": "動能 120 日", "type": "momentum", "lookback": 120},
+    {"label": "fw50m", "name": "50% 每月再平衡", "type": "fixed_weight", "weight": "0.5", "period": "month"}
+  ]
+}

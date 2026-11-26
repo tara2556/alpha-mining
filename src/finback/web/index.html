@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>finback 回測報告</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>finback 回測報告</h1>
+      <p class="sub">資料由本機 <code>reports/</code> 讀取；所有指標由帳本重新計算</p>
+    </div>
+    <label class="picker">
+      <span>報告</span>
+      <select id="report-select" aria-label="選擇報告"></select>
+    </label>
+  </header>
+
+  <main id="main">
+    <p id="status" class="status" role="status">載入中…</p>
+
+    <section id="content" hidden>
+      <div id="banner" class="banner" hidden></div>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>績效摘要</h2>
+          <p class="hint" id="period"></p>
+        </div>
+        <div class="table-wrap">
+          <table class="summary" id="summary-table">
+            <thead>
+              <tr>
+                <th scope="col">策略</th>
+                <th scope="col" class="num">期末淨值</th>
+                <th scope="col" class="num">淨入金</th>
+                <th scope="col" class="num">累積報酬</th>
+                <th scope="col" class="num">最大回撤</th>
+                <th scope="col" class="num" title="相對標的含息日報酬；首日排除">Beta</th>
+                <th scope="col" class="num">期初 → 期末曝險</th>
+                <th scope="col" class="num">交易次數</th>
+                <th scope="col" class="num">交易成本</th>
+                <th scope="col" class="num">股息</th>
+                <th scope="col">帳本核對</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="hint">累積報酬、回撤由排除入金影響的淨值指數計算；帳本核對檢查每一天
+          「現金 + 股數 × 收盤價 = 淨值」。</p>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>淨值指數</h2>
+          <p class="hint">起點 = 1；虛線為標的含息報酬（首日開盤起）</p>
+        </div>
+        <div class="legend" id="legend"></div>
+        <div class="chart" id="chart-wealth"></div>
+      </section>
+
+      <div class="grid-2">
+        <section class="card">
+          <div class="card-head">
+            <h2>回撤</h2>
+            <p class="hint">距離歷史高點的跌幅</p>
+          </div>
+          <div class="chart short" id="chart-drawdown"></div>
+        </section>
+        <section class="card">
+          <div class="card-head">
+            <h2>曝險</h2>
+            <p class="hint">持股市值 ÷ 淨值；不再平衡時隨價格漂移</p>
+          </div>
+          <div class="chart short" id="chart-exposure"></div>
+        </section>
+      </div>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>每日帳本</h2>
+          <div class="tabs" id="ledger-tabs" role="tablist" aria-label="選擇帳本"></div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="events-only"> 只顯示有交易、股息或入金的日子</label>
+        <div class="table-wrap tall">
+          <table class="ledger" id="ledger-table">
+            <thead>
+              <tr>
+                <th scope="col">日期</th>
+                <th scope="col">交易</th>
+                <th scope="col" class="num">收盤</th>
+                <th scope="col" class="num">股數</th>
+                <th scope="col" class="num">現金</th>
+                <th scope="col" class="num">市值</th>
+                <th scope="col" class="num">淨值</th>
+                <th scope="col" class="num">交易成本</th>
+                <th scope="col" class="num">股息</th>
+                <th scope="col" class="num">入金</th>
+                <th scope="col" class="num">日報酬</th>
+                <th scope="col" class="num">回撤</th>
+                <th scope="col" class="num">曝險</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>執行參數與資料來源</h2></div>
+        <dl class="meta" id="run-meta"></dl>
+        <details id="report-md" hidden>
+          <summary>報告說明（report.md）</summary>
+          <pre></pre>
+        </details>
+        <details>
+          <summary>原始 run.json</summary>
+          <pre id="run-json"></pre>
+        </details>
+      </section>
+    </section>
+  </main>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

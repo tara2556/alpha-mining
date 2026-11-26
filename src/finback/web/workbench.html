@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>finback 工作台</title>
+  <link rel="stylesheet" href="/workbench.css">
+</head>
+<body>
+  <header class="bar">
+    <strong class="logo">finback</strong>
+    <label class="field inline">
+      <span>資料</span>
+      <select id="dataset" aria-label="資料集"></select>
+    </label>
+    <button type="button" id="open-download" class="ghost">＋ 下載</button>
+    <label class="field inline"><span>起</span><input type="date" id="start"></label>
+    <label class="field inline"><span>迄</span><input type="date" id="end"></label>
+    <label class="field inline" title="此日（含）之後為樣本外，用來檢驗沒有被調參看過的期間">
+      <span>樣本外起點</span><input type="date" id="split">
+    </label>
+    <span class="spacer"></span>
+    <a href="/reports" class="link">已存報告 →</a>
+  </header>
+
+  <form id="download-form" class="download" hidden>
+    <strong>從 FinMind 下載日線</strong>
+    <label class="field inline"><span>代號</span><input id="dl-symbol" value="0050" size="6" required></label>
+    <label class="field inline"><span>起</span><input type="date" id="dl-start" value="2020-01-01" required></label>
+    <label class="field inline"><span>迄</span><input type="date" id="dl-end" required></label>
+    <button type="submit">下載</button>
+    <button type="button" class="ghost" id="dl-cancel">取消</button>
+    <span id="dl-status" class="muted" role="status"></span>
+  </form>
+
+  <div class="layout">
+    <aside class="pool" aria-label="Alpha 池">
+      <div class="pool-head">
+        <h2>Alpha 池</h2>
+        <div class="pool-actions">
+          <button type="button" class="ghost small" id="eval-all" title="以 5 日預測期評估池內所有公式">全部評估</button>
+          <button type="button" class="small" id="new-alpha">＋ 新公式</button>
+        </div>
+      </div>
+      <ul id="pool-list"></ul>
+      <p class="muted tiny">IC = alpha 與「隔日開盤起 5 日報酬」的相關係數；樣本內／樣本外分開計算。</p>
+    </aside>
+
+    <section class="chart-area">
+      <div class="legend" id="legend" aria-live="off"></div>
+      <div id="chart" class="chart"></div>
+      <p class="muted tiny chart-note">價格為分割調整後（僅顯示用）；訊號以不含未來資訊的方式另行計算。
+        窗格：價格與成交量／alpha／淨值指數（策略 vs 買入持有）。</p>
+    </section>
+
+    <aside class="panel">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="formula" aria-selected="true">公式</button>
+        <button type="button" role="tab" data-tab="strategy" aria-selected="false">策略回測</button>
+      </div>
+
+      <section class="tab" id="tab-formula">
+        <label class="field"><span>名稱</span><input id="alpha-name" placeholder="例如 mom20" autocomplete="off"></label>
+        <label class="field"><span>公式 <span class="muted tiny">Ctrl+Enter 評估</span></span>
+          <textarea id="alpha-expr" rows="4" spellcheck="false" placeholder="ts_mean(close, 20) / ts_mean(close, 60) - 1"></textarea>
+        </label>
+        <label class="field"><span>說明</span><input id="alpha-desc" autocomplete="off"></label>
+        <div class="row">
+          <button type="button" id="evaluate">評估</button>
+          <button type="button" class="ghost" id="save-alpha">存入池</button>
+          <button type="button" class="ghost danger" id="delete-alpha">刪除</button>
+        </div>
+        <p id="formula-msg" class="msg" role="status"></p>
+        <div id="eval-result" hidden>
+          <h3>預測力</h3>
+          <div class="table-wrap"><table class="stats" id="ic-table"></table></div>
+          <h3>分組報酬 <span class="muted tiny" id="q-title"></span></h3>
+          <div id="quantile-chart" class="qchart"></div>
+          <p class="muted tiny" id="eval-note"></p>
+        </div>
+        <details class="ref">
+          <summary>函數與變數</summary>
+          <dl id="ref-list"></dl>
+        </details>
+      </section>
+
+      <section class="tab" id="tab-strategy" hidden>
+        <label class="field"><span>策略類型</span>
+          <select id="st-type">
+            <option value="alpha">alpha 門檻（使用公式頁的公式）</option>
+            <option value="sma_cross">均線交叉</option>
+            <option value="momentum">動能</option>
+            <option value="fixed_weight">固定比例再平衡</option>
+            <option value="buy_and_hold">買入持有</option>
+          </select>
+        </label>
+        <div id="st-params" class="grid2"></div>
+        <details>
+          <summary>資金與成本</summary>
+          <div class="grid2">
+            <label class="field"><span>本金</span><input type="number" id="cash" value="1000000" min="1" step="1000"></label>
+            <label class="field"><span>交易單位（股）</span><input type="number" id="lot" value="1" min="1" step="1"></label>
+            <label class="field"><span>手續費率</span><input type="number" id="c-rate" value="0.001425" step="0.000025" min="0"></label>
+            <label class="field"><span>手續費折扣</span><input type="number" id="c-disc" value="1" step="0.05" min="0" max="1"></label>
+            <label class="field"><span>最低手續費</span><input type="number" id="c-min" value="20" step="1" min="0"></label>
+            <label class="field"><span>賣出交易稅</span><input type="number" id="c-tax" value="0.001" step="0.0005" min="0"></label>
+          </div>
+          <p class="muted tiny">ETF 交易稅 0.1%，一般股票 0.3%。皆為輸入假設，非券商報價。</p>
+        </details>
+        <div class="row">
+          <button type="button" id="run">執行回測</button>
+          <input id="save-name" placeholder="報告名稱（選填）" size="14" aria-label="報告名稱">
+          <button type="button" class="ghost" id="save-report">另存報告</button>
+        </div>
+        <p id="strategy-msg" class="msg" role="status"></p>
+        <div id="bt-result" hidden>
+          <div class="table-wrap"><table class="stats" id="bt-table"></table></div>
+          <h3>成交紀錄 <span class="muted tiny" id="trade-count"></span></h3>
+          <div class="table-wrap trades"><table class="stats" id="trade-table"></table></div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <script src="/vendor/lightweight-charts.js"></script>
+  <script src="/workbench.js"></script>
+</body>
+</html>

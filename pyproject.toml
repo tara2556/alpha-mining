@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "finback-tw"
+name = "alpha-mining"
 version = "0.1.0"
-description = "A research-first backtesting toolkit for Taiwan stocks, futures, and options."
+description = "Taiwan market alpha research workbench: formula alphas, auditable backtests, TradingView-style UI."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
